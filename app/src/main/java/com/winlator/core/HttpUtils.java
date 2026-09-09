@@ -14,27 +14,26 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public abstract class HttpUtils {
-    private static void downloadAsync(String url, Callback<String> onDownloadComplete) {
+    public static String downloadSync(String url) {
         try {
             HttpURLConnection connection = (HttpURLConnection)(new URL(url)).openConnection();
             if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
-                onDownloadComplete.call(null);
-                return;
+                return null;
             }
 
             byte[] bytes;
             try (InputStream inStream = connection.getInputStream()) {
                 bytes = StreamUtils.copyToByteArray(inStream);
             }
-            onDownloadComplete.call(new String(bytes, StandardCharsets.UTF_8));
+            return new String(bytes, StandardCharsets.UTF_8);
         }
         catch (Exception e) {
-            onDownloadComplete.call(null);
+            return null;
         }
     }
 
     public static void download(final String url, final Callback<String> onDownloadComplete) {
-        Executors.newSingleThreadExecutor().execute(() -> downloadAsync(url, onDownloadComplete));
+        Executors.newSingleThreadExecutor().execute(() -> onDownloadComplete.call(downloadSync(url)));
     }
 
     private static void downloadAsync(String url, File destination, AtomicBoolean interruptRef, Callback<Integer> onPublishProgress, Callback<Boolean> onDownloadComplete) {
@@ -88,5 +87,50 @@ public abstract class HttpUtils {
                 });
             });
         });
+    }
+
+    public static boolean verifyChecksum(File file, String expectedChecksum) {
+        if (expectedChecksum == null || expectedChecksum.isEmpty()) return false;
+        String algorithm;
+        int len = expectedChecksum.trim().length();
+        if (len == 64) {
+            algorithm = "SHA-256";
+        } else if (len == 32) {
+            algorithm = "MD5";
+        } else {
+            return false;
+        }
+
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance(algorithm);
+            try (java.io.FileInputStream fis = new java.io.FileInputStream(file)) {
+                byte[] byteArray = new byte[1024];
+                int bytesCount;
+                while ((bytesCount = fis.read(byteArray)) != -1) {
+                    digest.update(byteArray, 0, bytesCount);
+                }
+            }
+            byte[] bytes = digest.digest();
+            StringBuilder sb = new StringBuilder();
+            for (byte b : bytes) {
+                sb.append(String.format("%02x", b));
+            }
+            String calculated = sb.toString();
+            return calculated.equalsIgnoreCase(expectedChecksum.trim());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public static String extractChecksum(String content, String algorithm) {
+        if (content == null) return null;
+        content = content.trim();
+        int expectedLength = algorithm.equalsIgnoreCase("SHA-256") ? 64 : 32;
+        for (String part : content.split("\\s+")) {
+            if (part.length() == expectedLength && part.matches("[0-9a-fA-F]+")) {
+                return part.toLowerCase(java.util.Locale.ENGLISH);
+            }
+        }
+        return null;
     }
 }

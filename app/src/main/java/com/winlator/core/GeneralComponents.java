@@ -228,13 +228,50 @@ public abstract class GeneralComponents {
         return filename.replace(type.lowerName()+"-", "").replace(".tzst", "").replace(".sf2", "");
     }
 
-    private static void downloadComponentFile(final Type type, final String filename, final Spinner spinner, final String defaultItem) {
+    private static void downloadComponentFile(final Type type, final String filename, final String expectedChecksum, final Spinner spinner, final String defaultItem) {
         final Activity activity = (Activity)spinner.getContext();
-        File destination = new File(getComponentDir(type, activity), filename);
+        final File destination = new File(getComponentDir(type, activity), filename);
         if (destination.isFile()) destination.delete();
         HttpUtils.download(activity, String.format(INSTALLABLE_COMPONENTS_URL, type.lowerName()+"/"+filename), destination, (success) -> {
             if (success) {
-                loadSpinner(type, spinner, parseDisplayText(type, filename), defaultItem);
+                if (type == Type.BOX64 || type == Type.DXVK || type == Type.VKD3D || type == Type.TURNIP) {
+                    java.util.concurrent.Executors.newSingleThreadExecutor().execute(() -> {
+                        boolean verified = false;
+                        if (expectedChecksum != null && !expectedChecksum.isEmpty()) {
+                            verified = HttpUtils.verifyChecksum(destination, expectedChecksum);
+                        } else {
+                            String sha256Content = HttpUtils.downloadSync(String.format(INSTALLABLE_COMPONENTS_URL, type.lowerName()+"/"+filename+".sha256"));
+                            if (sha256Content != null && !sha256Content.isEmpty()) {
+                                String hash = HttpUtils.extractChecksum(sha256Content, "SHA-256");
+                                if (hash != null && HttpUtils.verifyChecksum(destination, hash)) {
+                                    verified = true;
+                                }
+                            }
+
+                            if (!verified) {
+                                String md5Content = HttpUtils.downloadSync(String.format(INSTALLABLE_COMPONENTS_URL, type.lowerName()+"/"+filename+".md5"));
+                                if (md5Content != null && !md5Content.isEmpty()) {
+                                    String hash = HttpUtils.extractChecksum(md5Content, "MD5");
+                                    if (hash != null && HttpUtils.verifyChecksum(destination, hash)) {
+                                        verified = true;
+                                    }
+                                }
+                            }
+                        }
+
+                        final boolean finalVerified = verified;
+                        activity.runOnUiThread(() -> {
+                            if (finalVerified) {
+                                loadSpinner(type, spinner, parseDisplayText(type, filename), defaultItem);
+                            } else {
+                                if (destination.isFile()) destination.delete();
+                                AppUtils.showToast(activity, R.string.checksum_verification_failed);
+                            }
+                        });
+                    });
+                } else {
+                    loadSpinner(type, spinner, parseDisplayText(type, filename), defaultItem);
+                }
             }
             else AppUtils.showToast(activity, R.string.a_network_error_occurred);
         });
@@ -338,14 +375,32 @@ public abstract class GeneralComponents {
                     AppUtils.showToast(activity, R.string.there_are_no_items_to_download);
                     return;
                 }
-                final String[] filenames = content.split("\n");
-                final String[] items = filenames.clone();
-                for (int i = 0; i < items.length; i++) {
-                    items[i] = type.title()+" "+parseDisplayText(type, items[i]);
+                final String[] lines = content.split("\n");
+                final ArrayList<String> filenamesList = new ArrayList<>();
+                final ArrayList<String> checksumsList = new ArrayList<>();
+                for (String line : lines) {
+                    line = line.trim();
+                    if (line.isEmpty()) continue;
+                    String[] parts = line.split("\\s+");
+                    filenamesList.add(parts[0]);
+                    if (parts.length > 1) {
+                        checksumsList.add(parts[1]);
+                    } else {
+                        checksumsList.add(null);
+                    }
+                }
+                final String[] filenames = filenamesList.toArray(new String[0]);
+                final String[] checksums = checksumsList.toArray(new String[0]);
+                final String[] items = new String[filenames.length];
+                for (int i = 0; i < filenames.length; i++) {
+                    items[i] = type.title()+" "+parseDisplayText(type, filenames[i]);
                 }
 
                 ContentDialog.showSelectionList(activity, R.string.install_component, items, false, (positions) -> {
-                    if (!positions.isEmpty()) downloadComponentFile(type, filenames[positions.get(0)], spinner, defaultItem);
+                    if (!positions.isEmpty()) {
+                        int pos = positions.get(0);
+                        downloadComponentFile(type, filenames[pos], checksums[pos], spinner, defaultItem);
+                    }
                 });
             }
             else AppUtils.showToast(activity, R.string.a_network_error_occurred);

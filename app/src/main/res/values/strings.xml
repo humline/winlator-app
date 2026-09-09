@@ -356,4 +356,5 @@
     <string name="fgs_notification_content_container_background">A container session is running in the background</string>
     <string name="fgs_notification_content_container_foreground">There is a container session running</string>
     <string name="fgs_notification_content_else">Winlator is running in the background</string>
+    <string name="checksum_verification_failed">Checksum verification failed</string>
 </resources>
