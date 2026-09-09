@@ -298,4 +298,5 @@
     <string name="fgs_notification_content_container_foreground">Запущен контейнерный сеанс</string>
     <string name="fgs_notification_content_else">Winlator работает в фоновом режиме</string>
     <string name="enable_background_wakelock">Включить wakelock, когда устройство заблокировано</string>
+    <string name="checksum_verification_failed">Ошибка проверки контрольной суммы</string>
 </resources>
