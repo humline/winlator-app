@@ -116,7 +116,15 @@ public class XInputExtension extends Extension implements XResourceManager.OnRes
             Bitmask mask = new Bitmask();
             for (j = 0; j < maskLen; j++) {
                 int value = inputStream.readInt();
-                mask.set(value << j);
+                if (value == 0) continue;
+
+                int baseBit = j * Integer.SIZE;
+                for (int bit = 0; bit < Integer.SIZE; bit++) {
+                    if ((value & (1 << bit)) == 0) continue;
+
+                    int absoluteBit = baseBit + bit;
+                    if (absoluteBit < Integer.SIZE) mask.set(1 << absoluteBit);
+                }
             }
 
             for (j = events.size()-1; j >= 0; j--) {

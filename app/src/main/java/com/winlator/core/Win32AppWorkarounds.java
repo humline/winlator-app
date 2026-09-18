@@ -183,6 +183,7 @@ public class Win32AppWorkarounds implements OnPreExecListener {
                         if (saveMemoryTask == null) saveMemoryTask = new SaveMemoryTask();
                         saveMemoryTask.start();
                     }
+                    else if (saveMemoryTask != null) saveMemoryTask.stop();
                     return false;
                 };
             default:

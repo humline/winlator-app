@@ -29,6 +29,9 @@ import com.winlator.xserver.events.PresentConfigureNotify;
 import com.winlator.xserver.events.PresentIdleNotify;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -40,8 +43,10 @@ public class PresentExtension extends Extension implements WindowManager.OnWindo
     public enum CompleteMode {COPY, FLIP, SKIP}
     private static final byte FLAG_WINDOW_DESTROYED = (1<<0);
     private final SparseArray<PresentEvent> events = new SparseArray<>();
+    private final Set<XClient> eglContextClients = Collections.newSetFromMap(new IdentityHashMap<>());
     private SyncExtension syncExtension;
     private long eglContextPtr;
+    private int eglContextRefCount;
     private ScheduledExecutorService idleNotifyScheduler;
 
     private static abstract class ClientOpcodes {
@@ -71,6 +76,19 @@ public class PresentExtension extends Extension implements WindowManager.OnWindo
     @Override
     public byte getEventCount() {
         return 3;
+    }
+
+    private void shutdownIdleNotifyScheduler() {
+        if (idleNotifyScheduler != null) {
+            idleNotifyScheduler.shutdownNow();
+            idleNotifyScheduler = null;
+        }
+    }
+
+    private void shutdownIdleNotifySchedulerIfIdle() {
+        synchronized (events) {
+            if (events.size() == 0) shutdownIdleNotifyScheduler();
+        }
     }
 
     private void sendConfigureNotify(Window window, int pixmapFlags) {
@@ -143,12 +161,23 @@ public class PresentExtension extends Extension implements WindowManager.OnWindo
         }
     }
 
-    private void createCopyEGLContext(XClient client) {
-        eglContextPtr = GPUHelper.createOffscreenEGLContext(true);
-        client.addOnDestroyListener((unused) -> {
+    private synchronized void createCopyEGLContext(XClient client) {
+        if (eglContextPtr == 0) eglContextPtr = GPUHelper.createOffscreenEGLContext(true);
+        if (!eglContextClients.add(client)) return;
+
+        eglContextRefCount++;
+        client.addOnDestroyListener((unused) -> releaseCopyEGLContext(client));
+    }
+
+    private synchronized void releaseCopyEGLContext(XClient client) {
+        if (!eglContextClients.remove(client)) return;
+
+        eglContextRefCount--;
+        if (eglContextRefCount <= 0 && eglContextPtr != 0) {
             GPUHelper.destroyOffscreenEGLContext(eglContextPtr);
             eglContextPtr = 0;
-        });
+            eglContextRefCount = 0;
+        }
     }
 
     private void presentPixmap(XClient client, XInputStream inputStream, XOutputStream outputStream) throws IOException, XRequestError {
@@ -182,7 +211,7 @@ public class PresentExtension extends Extension implements WindowManager.OnWindo
             if (pixmap != null) {
                 Texture srcTexture = pixmap.drawable.getTexture();
                 if (srcTexture instanceof GPUImage) {
-                    if (eglContextPtr == 0) createCopyEGLContext(client);
+                    createCopyEGLContext(client);
                     content.setData(null);
                     content.getTexture().copyFromSource(srcTexture);
                     content.forceUpdate();
@@ -218,7 +247,10 @@ public class PresentExtension extends Extension implements WindowManager.OnWindo
                     if (!mask.isEmpty()) {
                         event.mask = mask;
                     }
-                    else events.remove(eventId);
+                    else {
+                        events.remove(eventId);
+                        if (events.size() == 0) shutdownIdleNotifyScheduler();
+                    }
                 }
                 else {
                     event = new PresentEvent();
@@ -266,6 +298,7 @@ public class PresentExtension extends Extension implements WindowManager.OnWindo
                     if (event.window == resource) events.removeAt(i);
                 }
             }
+            shutdownIdleNotifySchedulerIfIdle();
         }
     }
 

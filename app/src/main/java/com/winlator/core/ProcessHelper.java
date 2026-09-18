@@ -18,9 +18,11 @@ import java.io.InputStreamReader;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 
@@ -284,7 +286,7 @@ public abstract class ProcessHelper {
         File procFile = new File("/proc");
         String[] pids = procFile.list((file, name) -> (new File(file, name)).isDirectory() && name.matches("[0-9]+"));
         if (pids == null) return Collections.emptyList();
-        ArrayList<PStat> result = new ArrayList<>();
+        ArrayList<PStat> stats = new ArrayList<>();
         int parentPID = Os.getpid();
 
         for (String pid : pids) {
@@ -333,16 +335,32 @@ public abstract class ProcessHelper {
                     }
                 }
 
-                if (pstat.parentPID == parentPID || pstat.pid > parentPID) {
-                    pstat.name = getProcessName(pstat.pid);
-                    if (pstat.name.isEmpty()) pstat.name = pstat.shortName;
-                    pstat.guestProcess = pstat.name.contains("wine") || pstat.name.contains(".exe");
-                    result.add(pstat);
-                }
+                pstat.name = getProcessName(pstat.pid);
+                if (pstat.name.isEmpty()) pstat.name = pstat.shortName;
+                pstat.guestProcess = pstat.name.contains("wine") || pstat.name.contains(".exe");
+                stats.add(pstat);
             }
             catch (Exception e) {
                 return Collections.emptyList();
             }
+        }
+
+        Set<Integer> descendantPIDs = new HashSet<>();
+        descendantPIDs.add(parentPID);
+        boolean hasChanges;
+        do {
+            hasChanges = false;
+            for (PStat pstat : stats) {
+                if (pstat.pid != parentPID && descendantPIDs.contains(pstat.parentPID) && descendantPIDs.add(pstat.pid)) {
+                    hasChanges = true;
+                }
+            }
+        }
+        while (hasChanges);
+
+        ArrayList<PStat> result = new ArrayList<>();
+        for (PStat pstat : stats) {
+            if (pstat.pid != parentPID && descendantPIDs.contains(pstat.pid)) result.add(pstat);
         }
 
         return result;

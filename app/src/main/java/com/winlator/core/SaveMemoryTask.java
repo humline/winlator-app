@@ -4,26 +4,36 @@ import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 
-public class SaveMemoryTask extends TimerTask {
+public class SaveMemoryTask {
     private Timer timer;
-    private String cachedProcessName = null;
+    private TimerTask task;
+    private volatile String cachedProcessName = null;
 
     public synchronized void start() {
         if (timer != null) return;
-        timer = new Timer();
-        timer.schedule(this, 0, 500);
+        timer = new Timer("SaveMemoryTask", true);
+        task = new TimerTask() {
+            @Override
+            public void run() {
+                runTask();
+            }
+        };
+        timer.schedule(task, 0, 500);
     }
 
     public synchronized void stop() {
         cachedProcessName = null;
+        if (task != null) {
+            task.cancel();
+            task = null;
+        }
         if (timer != null) {
             timer.cancel();
             timer = null;
         }
     }
 
-    @Override
-    public void run() {
+    private void runTask() {
         List<ProcessHelper.PStat> processes = ProcessHelper.getChildProcesses();
         int steamPID = 0;
         boolean saveMemory = false;
@@ -45,6 +55,11 @@ public class SaveMemoryTask extends TimerTask {
                 }
             }
             if (saveMemory) break;
+        }
+
+        if (steamPID == 0) {
+            stop();
+            return;
         }
 
         if (saveMemory) {
