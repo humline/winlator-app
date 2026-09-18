@@ -2,6 +2,7 @@ package com.winlator.core;
 
 import android.os.Process;
 import android.system.Os;
+import android.system.OsConstants;
 
 import androidx.annotation.NonNull;
 
@@ -10,27 +11,29 @@ import com.winlator.MainActivity;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 
 public abstract class ProcessHelper {
     public enum PState {RUNNING, SLEEPING, WAITING, ZOMBIE, STOPPED, DEAD, OTHER}
     private static final ArrayList<Callback<String>> debugCallbacks = new ArrayList<>();
-    private static final byte SIGCONT = 18;
-    private static final byte SIGSTOP = 19;
 
     public static class PStat {
         public int pid = 0;
         public String name = "";
+        public String shortName = "";
         public PState state = PState.OTHER;
         public int parentPID = 0;
         public boolean guestProcess = false;
@@ -43,11 +46,15 @@ public abstract class ProcessHelper {
     }
 
     public static void suspendProcess(int pid) {
-        Process.sendSignal(pid, SIGSTOP);
+        Process.sendSignal(pid, OsConstants.SIGSTOP);
     }
 
     public static void resumeProcess(int pid) {
-        Process.sendSignal(pid, SIGCONT);
+        Process.sendSignal(pid, OsConstants.SIGCONT);
+    }
+
+    public static void killProcess(int pid) {
+        Process.sendSignal(pid, OsConstants.SIGKILL);
     }
 
     public static int exec(String command) {
@@ -216,11 +223,70 @@ public abstract class ProcessHelper {
         return affinityMask;
     }
 
+    public static long getMemoryUsage(int pid) {
+        try (Scanner scanner = new Scanner(new FileInputStream("/proc/"+pid+"/statm"))) {
+            byte index = 0;
+            long vmSize = 0;
+            long resident = 0;
+
+            while (scanner.hasNext() && index < 2) {
+                byte column = index++;
+                if (column == 0) {
+                    vmSize = scanner.nextLong();
+                }
+                else resident = scanner.nextLong();
+            }
+
+            return (resident * Os.sysconf(OsConstants._SC_PAGESIZE));
+        }
+        catch (Exception e) {
+            return 0;
+        }
+    }
+
+    public static String getProcessName(int pid) {
+        try (BufferedReader reader = new BufferedReader(new FileReader("/proc/"+pid+"/cmdline"))) {
+            StringBuilder result = new StringBuilder();
+            int chr;
+            while ((chr = reader.read()) != -1 && chr != 0) {
+                result.append((char)chr);
+            }
+            return result.length() > 0 && result.charAt(0) == '/' ? FileUtils.getName(result.toString()) : result.toString();
+        }
+        catch (IOException e) {
+            return "";
+        }
+    }
+
+    public static List<String> getProcessCmdLine(int pid) {
+        try (BufferedReader reader = new BufferedReader(new FileReader("/proc/"+pid+"/cmdline"))) {
+            StringBuilder sb = new StringBuilder();
+            ArrayList<String> result = new ArrayList<>();
+
+            int charsRead;
+            char[] chars = new char[64];
+            while ((charsRead = reader.read(chars)) != -1) {
+                for (int i = 0; i < charsRead; i++) {
+                    if (chars[i] == '\0') {
+                        if (sb.length() == 0) break;
+                        result.add(sb.toString());
+                        sb = new StringBuilder();
+                    }
+                    else sb.append(chars[i]);
+                }
+            }
+            return result;
+        }
+        catch (IOException e) {
+            return Collections.emptyList();
+        }
+    }
+
     public static List<PStat> getChildProcesses() {
         File procFile = new File("/proc");
         String[] pids = procFile.list((file, name) -> (new File(file, name)).isDirectory() && name.matches("[0-9]+"));
         if (pids == null) return Collections.emptyList();
-        ArrayList<PStat> result = new ArrayList<>();
+        ArrayList<PStat> stats = new ArrayList<>();
         int parentPID = Os.getpid();
 
         for (String pid : pids) {
@@ -236,7 +302,7 @@ public abstract class ProcessHelper {
                         case 1:
                             Pattern oldDelimiter = scanner.delimiter();
                             scanner.useDelimiter("\\)");
-                            pstat.name = scanner.hasNext() ? scanner.next().substring(2) : "";
+                            pstat.shortName = scanner.hasNext() ? scanner.next().substring(2) : "";
                             scanner.useDelimiter(oldDelimiter);
                             if (scanner.hasNext()) scanner.next();
                             break;
@@ -269,14 +335,32 @@ public abstract class ProcessHelper {
                     }
                 }
 
-                if (pstat.parentPID == parentPID || pstat.pid > parentPID) {
-                    pstat.guestProcess = pstat.name.contains("wine") || pstat.name.contains(".exe");
-                    result.add(pstat);
-                }
+                pstat.name = getProcessName(pstat.pid);
+                if (pstat.name.isEmpty()) pstat.name = pstat.shortName;
+                pstat.guestProcess = pstat.name.contains("wine") || pstat.name.contains(".exe");
+                stats.add(pstat);
             }
             catch (Exception e) {
                 return Collections.emptyList();
             }
+        }
+
+        Set<Integer> descendantPIDs = new HashSet<>();
+        descendantPIDs.add(parentPID);
+        boolean hasChanges;
+        do {
+            hasChanges = false;
+            for (PStat pstat : stats) {
+                if (pstat.pid != parentPID && descendantPIDs.contains(pstat.parentPID) && descendantPIDs.add(pstat.pid)) {
+                    hasChanges = true;
+                }
+            }
+        }
+        while (hasChanges);
+
+        ArrayList<PStat> result = new ArrayList<>();
+        for (PStat pstat : stats) {
+            if (pstat.pid != parentPID && descendantPIDs.contains(pstat.pid)) result.add(pstat);
         }
 
         return result;

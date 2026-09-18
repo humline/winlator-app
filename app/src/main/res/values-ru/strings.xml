@@ -188,7 +188,6 @@
     <string name="removing_files">Удаление файлов...</string>
     <string name="disable_mouse_input">Отключить ввод с помощью мыши</string>
     <string name="move_cursor_to_touchpoint">Переместите курсор в точку касания</string>
-    <string name="sync_every_frame">Синхронизируйте каждый кадр</string>
     <string name="dpi_font_size">DPI (Размер шрифта)</string>
     <string name="gamepad_model">Модель геймпада</string>
     <string name="file_manager">Файловый менеджер</string>
@@ -299,4 +298,6 @@
     <string name="fgs_notification_content_else">Winlator работает в фоновом режиме</string>
     <string name="enable_background_wakelock">Включить wakelock, когда устройство заблокировано</string>
     <string name="checksum_verification_failed">Ошибка проверки контрольной суммы</string>
+    <string name="save_mem_on_run_from_steam">Экономия памяти при запуске из Steam</string>
+    <string name="present_mode">Режим презентации</string>
 </resources>

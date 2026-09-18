@@ -743,7 +743,6 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
 
         if (graphicsDriver[0].equals(GraphicsDrivers.TURNIP)) {
-            envVars.put("MESA_VK_WSI_PRESENT_MODE", "mailbox");
             TurnipConfigDialog.setEnvVars(this, graphicsDriverConfig[0], envVars);
 
             if (changed) {

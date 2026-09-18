@@ -171,6 +171,9 @@ public class SettingsFragment extends Fragment {
         });
         cbEnableBackgroundWakelock.setVisibility(cbEnableBackgroundProtection.isChecked() ? View.VISIBLE : View.GONE);
 
+        final CheckBox cbSaveMemOnRunFromSteam = view.findViewById(R.id.CBSaveMemOnRunFromSteam);
+        cbSaveMemOnRunFromSteam.setChecked(preferences.getBoolean("save_mem_on_run_from_steam", true));
+
         final CheckBox cbEnableWineDebug = view.findViewById(R.id.CBEnableWineDebug);
         cbEnableWineDebug.setChecked(preferences.getBoolean("enable_wine_debug", false));
 
@@ -236,6 +239,7 @@ public class SettingsFragment extends Fragment {
             editor.putBoolean("use_android_clipboard_on_wine", cbUseAndroidClipboardOnWine.isChecked());
             editor.putBoolean("enable_background_protection", cbEnableBackgroundProtection.isChecked());
             editor.putBoolean("enable_background_wakelock", cbEnableBackgroundWakelock.isChecked());
+            editor.putBoolean("save_mem_on_run_from_steam", cbSaveMemOnRunFromSteam.isChecked());
             putGamepadPlayerConfigs(view, editor);
 
             GamepadHandler.GamepadModel gamepadModel = (GamepadHandler.GamepadModel)sGamepadModel.getAdapter().getItem(sGamepadModel.getSelectedItemPosition());
