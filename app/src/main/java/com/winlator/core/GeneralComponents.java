@@ -105,7 +105,7 @@ public abstract class GeneralComponents {
             if (this == Type.SOUNDFONT || this == ADRENOTOOLS_DRIVER) {
                 installMode = InstallMode.FILE;
             }
-            else if (this == Type.WINED3D || this == Type.DXVK || this == Type.VKD3D) {
+            else if (this == Type.WINED3D || this == Type.DXVK || this == Type.VKD3D || this == Type.TURNIP) {
                 installMode = InstallMode.BOTH;
             }
             else installMode = InstallMode.DOWNLOAD;
@@ -226,6 +226,14 @@ public abstract class GeneralComponents {
 
     private static String parseDisplayText(Type type, String filename) {
         return filename.replace(type.lowerName()+"-", "").replace(".tzst", "").replace(".sf2", "");
+    }
+
+    private static String parseIdentifierFromArchiveFilename(Type type, String filename) {
+        String normalizedName = filename.toLowerCase(Locale.ENGLISH);
+        String prefix = type.lowerName()+"-";
+        if (!normalizedName.startsWith(prefix)) return "";
+        if (!normalizedName.endsWith(".tzst")) return "";
+        return parseDisplayText(type, filename);
     }
 
     private static void downloadComponentFile(final Type type, final String filename, final String expectedChecksum, final Spinner spinner, final String defaultItem) {
@@ -349,6 +357,14 @@ public abstract class GeneralComponents {
                             if (contentType.equals(type.name()) && !identifier.isEmpty() && filesJSONArray != null) {
                                 installFromPackagedFile(activity, compressedType, type, source, identifier, filesJSONArray);
                                 loadSpinner(type, spinner, identifier, defaultItem);
+                            }
+                        }
+                        else if (type == Type.TURNIP) {
+                            String identifier = parseIdentifierFromArchiveFilename(type, FileUtils.getName(path));
+                            if (!identifier.isEmpty()) {
+                                File destination = new File(getComponentDir(type, activity), type.lowerName()+"-"+identifier+".tzst");
+                                if (destination.isFile()) FileUtils.delete(destination);
+                                if (FileUtils.copy(source, destination)) loadSpinner(type, spinner, identifier, defaultItem);
                             }
                         }
                         break;
