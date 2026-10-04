@@ -1,0 +1,49 @@
+# Test image for the Winlator app module: builds the debug APK and runs the
+# JVM unit tests. From the repository root (the app submodule checkout):
+#   nerdctl build -f app/Dockerfile.test -t winlator-app-test .
+FROM ubuntu:22.04
+
+# Avoid prompt during packages installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install JDK, wget, unzip, git, and other standard development/build tools
+RUN apt-get update && apt-get install -y \
+    openjdk-17-jdk-headless \
+    wget \
+    unzip \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set up Android SDK paths
+ENV ANDROID_HOME=/opt/android-sdk
+ENV PATH=${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}
+
+# Download and install Android SDK Command-line Tools
+RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip && \
+    unzip -q /tmp/cmdline-tools.zip -d ${ANDROID_HOME}/cmdline-tools && \
+    mv ${ANDROID_HOME}/cmdline-tools/cmdline-tools ${ANDROID_HOME}/cmdline-tools/latest && \
+    rm /tmp/cmdline-tools.zip
+
+# Accept Android SDK licenses
+RUN yes | sdkmanager --licenses
+
+# Install specific SDK platform, build tools, NDK, and CMake versions needed for the build
+RUN sdkmanager \
+    "platforms;android-35" \
+    "build-tools;35.0.0" \
+    "ndk;24.0.8215888" \
+    "cmake;3.22.1" \
+    "platform-tools"
+
+# Set working directory inside container
+WORKDIR /workspace
+
+# Copy the repository (app module + gradle wrapper) into the container
+COPY . .
+
+RUN chmod +x gradlew
+
+# Build the debug APK and run the JVM unit tests
+RUN ./gradlew --no-daemon assembleDebug testDebugUnitTest
