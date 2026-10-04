@@ -43,6 +43,7 @@ import com.winlator.container.Container;
 import com.winlator.container.ContainerManager;
 import com.winlator.contentdialog.ContentDialog;
 import com.winlator.contentdialog.GamepadPlayerConfigDialog;
+import com.winlator.contentdialog.GraphicsDiagnosticsDialog;
 import com.winlator.contentdialog.SoundFontTestDialog;
 import com.winlator.core.AppUtils;
 import com.winlator.core.ArrayUtils;
@@ -240,6 +241,10 @@ public class SettingsFragment extends Fragment {
                 }
                 else AppUtils.showToast(context, R.string.unable_to_export_backup);
             });
+        });
+
+        view.findViewById(R.id.BTGraphicsDiagnostics).setOnClickListener((v) -> {
+            (new GraphicsDiagnosticsDialog(getActivity(), null)).show();
         });
 
         view.findViewById(R.id.BTImportBackup).setOnClickListener((v) -> {

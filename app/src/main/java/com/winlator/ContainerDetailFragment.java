@@ -39,6 +39,7 @@ import com.winlator.container.GraphicsDrivers;
 import com.winlator.contentdialog.AddEnvVarDialog;
 import com.winlator.contentdialog.AudioDriverConfigDialog;
 import com.winlator.contentdialog.ContentDialog;
+import com.winlator.contentdialog.GraphicsDiagnosticsDialog;
 import com.winlator.contentdialog.VortekConfigDialog;
 import com.winlator.core.AppUtils;
 import com.winlator.core.Callback;
@@ -141,6 +142,7 @@ public class ContainerDetailFragment extends Fragment {
         String selectedGraphicsDriver = isEditMode() ? container.getGraphicsDriver() : GraphicsDrivers.getDefaultDriver(context);
         GraphicsDriverPicker graphicsDriverPicker = new GraphicsDriverPicker(view.findViewById(R.id.LLGraphicsDriver), selectedGraphicsDriver, oldGraphicsDriverConfig);
         if (isEditMode()) loadActiveDriverInfo(view, container);
+        view.findViewById(R.id.BTGraphicsDiagnostics).setOnClickListener((v) -> (new GraphicsDiagnosticsDialog(getActivity(), isEditMode() ? container : null)).show());
 
         String oldDXWrapperConfig = isEditMode() ? container.getDXWrapperConfig() : "";
         String selectedDXWrapper = isEditMode() ? container.getDXWrapper() : Container.DEFAULT_DXWRAPPER;
