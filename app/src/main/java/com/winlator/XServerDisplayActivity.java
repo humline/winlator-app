@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.os.Bundle;
+import android.os.Environment;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -18,6 +19,7 @@ import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.Spinner;
+import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -43,6 +45,7 @@ import com.winlator.contentdialog.ScreenEffectDialog;
 import com.winlator.contentdialog.TurnipConfigDialog;
 import com.winlator.contentdialog.VKD3DConfigDialog;
 import com.winlator.contentdialog.VirGLConfigDialog;
+import com.winlator.core.BackupManager;
 import com.winlator.core.StorageChecker;
 import com.winlator.contentdialog.WineD3DConfigDialog;
 import com.winlator.core.AppUtils;
@@ -99,6 +102,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.concurrent.Executors;
@@ -180,27 +184,25 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                 }
 
                 ContentDialog migrationDialog = new ContentDialog(this);
-                migrationDialog.setCancelable(false);
                 migrationDialog.setTitle(R.string.system_files_migration);
                 migrationDialog.setMessage(R.string.migration_warning, R.drawable.content_dialog_type_confirm);
+                ((TextView)migrationDialog.findViewById(R.id.BTConfirm)).setText(R.string.backup_now);
+                ((TextView)migrationDialog.findViewById(R.id.BTCancel)).setText(R.string.continue_without_backup);
+
+                // confirm = back up first, cancel = continue without backup,
+                // dismissing the dialog (back button) aborts the migration
+                final boolean[] handled = {false};
                 migrationDialog.setOnConfirmCallback(() -> {
-                    preloaderDialog.show(R.string.updating_system_files);
-                    Executors.newSingleThreadExecutor().execute(() -> {
-                        if (rootFS.recoverFromInterruptedLaunch()) {
-                            AppUtils.showToast(this, R.string.restored_previous_system_files);
-                        }
-                        runOnUiThread(() -> WineUtils.updateWineprefix(this, (status) -> {
-                            if (status == 0) {
-                                container.putExtra("wineprefixNeedsUpdate", null);
-                                container.putExtra("wincomponents", null);
-                                container.saveData();
-                                AppUtils.restartActivity(this);
-                            }
-                            else finish();
-                        }));
-                    });
+                    handled[0] = true;
+                    backupContainerThenUpdate(preloaderDialog);
                 });
-                migrationDialog.setOnCancelCallback(() -> finish());
+                migrationDialog.setOnCancelCallback(() -> {
+                    handled[0] = true;
+                    continueWineprefixUpdate(preloaderDialog);
+                });
+                migrationDialog.setOnDismissListener((dialog) -> {
+                    if (!handled[0]) finish();
+                });
                 migrationDialog.show();
                 return;
             }
@@ -299,6 +301,51 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                 changeWineAudioDriver();
             }
             setupXEnvironment();
+        });
+    }
+
+    /** Runs the wineprefix migration (with crash recovery) after the user confirmed it. */
+    private void continueWineprefixUpdate(PreloaderDialog preloaderDialog) {
+        preloaderDialog.show(R.string.updating_system_files);
+        Executors.newSingleThreadExecutor().execute(() -> {
+            if (rootFS.recoverFromInterruptedLaunch()) {
+                AppUtils.showToast(this, R.string.restored_previous_system_files);
+            }
+            runOnUiThread(() -> WineUtils.updateWineprefix(this, (status) -> {
+                if (status == 0) {
+                    container.putExtra("wineprefixNeedsUpdate", null);
+                    container.putExtra("wincomponents", null);
+                    container.saveData();
+                    AppUtils.restartActivity(this);
+                }
+                else finish();
+            }));
+        });
+    }
+
+    /** Exports a container backup first and then runs the wineprefix migration. */
+    private void backupContainerThenUpdate(PreloaderDialog preloaderDialog) {
+        preloaderDialog.show(R.string.exporting_backup);
+        Executors.newSingleThreadExecutor().execute(() -> {
+            File exported = null;
+            try {
+                exported = BackupManager.exportContainer(this, container);
+            }
+            catch (IOException e) {}
+            final File backupFile = exported;
+
+            runOnUiThread(() -> {
+                if (backupFile != null) {
+                    String path = backupFile.getPath().substring(backupFile.getPath().indexOf(Environment.DIRECTORY_DOWNLOADS));
+                    AppUtils.showToast(this, getString(R.string.backup_exported_to)+" "+path);
+                    continueWineprefixUpdate(preloaderDialog);
+                }
+                else {
+                    preloaderDialog.close();
+                    AppUtils.showToast(this, R.string.unable_to_export_backup);
+                    finish();
+                }
+            });
         });
     }
 

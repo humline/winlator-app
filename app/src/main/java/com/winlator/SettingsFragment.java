@@ -8,6 +8,7 @@ import android.media.midi.MidiDeviceInfo;
 import android.media.midi.MidiManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.LayoutInflater;
@@ -45,6 +46,7 @@ import com.winlator.contentdialog.GamepadPlayerConfigDialog;
 import com.winlator.contentdialog.SoundFontTestDialog;
 import com.winlator.core.AppUtils;
 import com.winlator.core.ArrayUtils;
+import com.winlator.core.BackupManager;
 import com.winlator.core.Callback;
 import com.winlator.core.DefaultVersion;
 import com.winlator.core.FileUtils;
@@ -66,6 +68,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.Executors;
@@ -76,6 +79,7 @@ public class SettingsFragment extends Fragment {
     public static final byte APP_THEME_LIGHT = 0;
     public static final byte APP_THEME_DARK = 1;
     private Callback<Uri> selectWineFileCallback;
+    private Callback<Uri> selectBackupFileCallback;
     private PreloaderDialog preloaderDialog;
     private SharedPreferences preferences;
     private boolean midiDeviceCallbackRegistered = false;
@@ -98,11 +102,13 @@ public class SettingsFragment extends Fragment {
         if (requestCode == MainActivity.OPEN_FILE_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
             try {
                 if (selectWineFileCallback != null && data != null) selectWineFileCallback.call(data.getData());
+                else if (selectBackupFileCallback != null && data != null) selectBackupFileCallback.call(data.getData());
             }
             catch (Exception e) {
-                AppUtils.showToast(getContext(), R.string.unable_to_import_profile);
+                AppUtils.showToast(getContext(), selectWineFileCallback != null ? R.string.unable_to_import_profile : R.string.unable_to_import_backup);
             }
             selectWineFileCallback = null;
+            selectBackupFileCallback = null;
         }
     }
 
@@ -214,6 +220,42 @@ public class SettingsFragment extends Fragment {
 
         view.findViewById(R.id.BTReinstallSystemFiles).setOnClickListener((v) -> {
             ContentDialog.confirm(context, R.string.do_you_want_to_reinstall_system_files, () -> RootFSInstaller.install((MainActivity)getActivity()));
+        });
+
+        view.findViewById(R.id.BTExportBackup).setOnClickListener((v) -> {
+            preloaderDialog.show(R.string.exporting_backup);
+            Executors.newSingleThreadExecutor().execute(() -> {
+                File file = null;
+                try {
+                    file = BackupManager.exportGlobal(context);
+                }
+                catch (IOException e) {}
+                preloaderDialog.closeOnUiThread();
+                if (file != null) {
+                    String path = file.getPath().substring(file.getPath().indexOf(Environment.DIRECTORY_DOWNLOADS));
+                    AppUtils.showToast(context, context.getString(R.string.backup_exported_to)+" "+path);
+                }
+                else AppUtils.showToast(context, R.string.unable_to_export_backup);
+            });
+        });
+
+        view.findViewById(R.id.BTImportBackup).setOnClickListener((v) -> {
+            selectBackupFileCallback = (uri) -> {
+                preloaderDialog.show(R.string.importing_backup);
+                Executors.newSingleThreadExecutor().execute(() -> {
+                    BackupManager.RestoreResult result = BackupManager.restore(context, uri);
+                    preloaderDialog.closeOnUiThread();
+                    if (result.isSuccess()) {
+                        AppUtils.showToast(context, result.conflicts.isEmpty() ? R.string.backup_restored : R.string.backup_restored_with_conflicts);
+                    }
+                    else AppUtils.showToast(context, R.string.unable_to_import_backup);
+                });
+            };
+
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
+            getActivity().startActivityFromFragment(this, intent, MainActivity.OPEN_FILE_REQUEST_CODE);
         });
 
         loadGamepadPlayerConfigs(view);

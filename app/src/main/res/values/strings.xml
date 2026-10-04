@@ -23,6 +23,17 @@
     <string name="restored_previous_system_files">Restored the previous system files after a failed update</string>
     <string name="system_files_migration">System Files Migration</string>
     <string name="migration_warning">This action updates the Wine prefix and system files. It is recommended to back up your containers first. Do you want to continue?</string>
+    <string name="export_backup">Export Backup</string>
+    <string name="import_backup">Import Backup</string>
+    <string name="exporting_backup">Exporting Backup...</string>
+    <string name="importing_backup">Importing Backup...</string>
+    <string name="backup_exported_to">Backup exported to</string>
+    <string name="backup_restored">Backup restored</string>
+    <string name="backup_restored_with_conflicts">Backup restored with conflicts</string>
+    <string name="unable_to_export_backup">Unable to export backup</string>
+    <string name="unable_to_import_backup">Unable to import backup</string>
+    <string name="backup_now">Backup Now</string>
+    <string name="continue_without_backup">Continue Without Backup</string>
     <string name="keyboard">Keyboard</string>
     <string name="toggle_fullscreen">Toggle Fullscreen</string>
     <string name="exit">Exit</string>
