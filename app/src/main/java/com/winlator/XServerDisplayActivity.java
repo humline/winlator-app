@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.hardware.input.InputManager;
+import android.media.MediaScannerConnection;
 import android.os.Bundle;
 import android.os.Environment;
 import android.view.KeyEvent;
@@ -49,6 +50,7 @@ import com.winlator.contentdialog.TurnipConfigDialog;
 import com.winlator.contentdialog.VKD3DConfigDialog;
 import com.winlator.contentdialog.VirGLConfigDialog;
 import com.winlator.core.BackupManager;
+import com.winlator.core.FrameTimeLogger;
 import com.winlator.core.StagedInstaller;
 import com.winlator.core.StagedLibSwap;
 import com.winlator.core.StorageChecker;
@@ -144,6 +146,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     private boolean capturePointerOnExternalMouse = true;
     private boolean hideSystemCursorOnExternalMouse = true;
     private InputManager inputManager;
+    private FrameTimeLogger frameTimeLogger;
     private MagnifierView magnifierView;
     private DebugDialog debugDialog;
     public int frameRatingWindowId = -1;
@@ -422,6 +425,10 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     protected void onDestroy() {
         if (inputManager != null) inputManager.unregisterInputDeviceListener(inputDeviceListener);
         getWindow().getDecorView().setPointerIcon(PointerIcon.getSystemIcon(this, PointerIcon.POINTER_ICON_TYPE_DEFAULT));
+        if (frameTimeLogger != null) {
+            frameTimeLogger.stop();
+            MediaScannerConnection.scanFile(this, new String[]{new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Winlator/benchmarks").getAbsolutePath()}, null, null);
+        }
         winHandler.stop();
         if (environment != null) environment.stopEnvironmentComponents();
         ForegroundService.stopSession(this);
@@ -708,6 +715,12 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         renderer.setCursorColor(preferences.getInt("cursor_color", 0xffffff));
         renderer.setCursorScale(preferences.getFloat("cursor_scale", 1.0f));
         renderer.setForceWindowsFullscreen(shortcut != null && shortcut.getExtra("forceFullscreen", "0").equals("1"));
+
+        if (preferences.getBoolean("frame_time_logger", false) || MainActivity.DEBUG_MODE) {
+            File benchmarksDir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Winlator/benchmarks");
+            frameTimeLogger = new FrameTimeLogger(benchmarksDir);
+            if (frameTimeLogger.start()) renderer.setFrameTimeLogger(frameTimeLogger);
+        }
 
         xServer.setRenderer(renderer);
         rootView.addView(xServerView);

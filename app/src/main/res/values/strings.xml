@@ -38,6 +38,7 @@
     <string name="unable_to_install_graphics_driver">Unable to install graphics driver files</string>
     <string name="active_driver_info">Active: %1$s + %2$s (cache: %3$s)</string>
     <string name="graphics_diagnostics">Graphics Diagnostics</string>
+    <string name="frame_time_logger">Frame-time logger (CSV in Downloads/Winlator/benchmarks)</string>
     <string name="keyboard">Keyboard</string>
     <string name="toggle_fullscreen">Toggle Fullscreen</string>
     <string name="exit">Exit</string>

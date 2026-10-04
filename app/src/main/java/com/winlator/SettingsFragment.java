@@ -149,6 +149,9 @@ public class SettingsFragment extends Fragment {
         final CheckBox cbHideSystemCursorOnExternalMouse = view.findViewById(R.id.CBHideSystemCursorOnExternalMouse);
         cbHideSystemCursorOnExternalMouse.setChecked(preferences.getBoolean("hide_system_cursor_on_external_mouse", true));
 
+        final CheckBox cbFrameTimeLogger = view.findViewById(R.id.CBFrameTimeLogger);
+        cbFrameTimeLogger.setChecked(preferences.getBoolean("frame_time_logger", false));
+
         final CheckBox cbOpenAndroidBrowserFromWine = view.findViewById(R.id.CBOpenAndroidBrowserFromWine);
         cbOpenAndroidBrowserFromWine.setChecked(preferences.getBoolean("open_android_browser_from_wine", true));
 
@@ -280,6 +283,7 @@ public class SettingsFragment extends Fragment {
             editor.putBoolean("move_cursor_to_touchpoint", cbMoveCursorToTouchpoint.isChecked());
             editor.putBoolean("capture_pointer_on_external_mouse", cbCapturePointerOnExternalMouse.isChecked());
             editor.putBoolean("hide_system_cursor_on_external_mouse", cbHideSystemCursorOnExternalMouse.isChecked());
+            editor.putBoolean("frame_time_logger", cbFrameTimeLogger.isChecked());
             editor.putFloat("cursor_speed", sbCursorSpeed.getValue() / 100.0f);
             editor.putFloat("cursor_scale", sbCursorSize.getValue() / 100.0f);
             editor.putInt("cursor_color", cpvCursorColor.getColor());
