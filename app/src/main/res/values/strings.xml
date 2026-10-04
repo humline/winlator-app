@@ -18,6 +18,11 @@
     <string name="updating_system_files">Updating System Files...</string>
     <string name="starting_up">Starting up...</string>
     <string name="unable_to_install_system_files">Unable to install system files</string>
+    <string name="not_enough_storage">Not enough storage space</string>
+    <string name="free_storage_space_hint">Free at least %1$d MB of storage space or back up your data and try again.</string>
+    <string name="restored_previous_system_files">Restored the previous system files after a failed update</string>
+    <string name="system_files_migration">System Files Migration</string>
+    <string name="migration_warning">This action updates the Wine prefix and system files. It is recommended to back up your containers first. Do you want to continue?</string>
     <string name="keyboard">Keyboard</string>
     <string name="toggle_fullscreen">Toggle Fullscreen</string>
     <string name="exit">Exit</string>

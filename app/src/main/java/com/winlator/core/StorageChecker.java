@@ -51,4 +51,19 @@ public abstract class StorageChecker {
     public static Result checkWineprefixUpdate(File rootDir, long prefixSize) {
         return check(rootDir, prefixSize / 2 + HEADROOM_BYTES);
     }
+
+    /** Recursively sums the size of the regular files below {@code dir}. */
+    public static long dirSize(File dir) {
+        if (dir == null || !dir.exists()) return 0;
+
+        long size = 0;
+        File[] files = dir.listFiles();
+        if (files == null) return dir.length();
+
+        for (File file : files) {
+            if (file.isDirectory()) size += dirSize(file);
+            else size += file.length();
+        }
+        return size;
+    }
 }

@@ -43,6 +43,7 @@ import com.winlator.contentdialog.ScreenEffectDialog;
 import com.winlator.contentdialog.TurnipConfigDialog;
 import com.winlator.contentdialog.VKD3DConfigDialog;
 import com.winlator.contentdialog.VirGLConfigDialog;
+import com.winlator.core.StorageChecker;
 import com.winlator.contentdialog.WineD3DConfigDialog;
 import com.winlator.core.AppUtils;
 import com.winlator.core.DefaultVersion;
@@ -172,16 +173,35 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
             boolean wineprefixNeedsUpdate = container.getExtra("wineprefixNeedsUpdate").equals("t");
             if (wineprefixNeedsUpdate) {
-                preloaderDialog.show(R.string.updating_system_files);
-                WineUtils.updateWineprefix(this, (status) -> {
-                    if (status == 0) {
-                        container.putExtra("wineprefixNeedsUpdate", null);
-                        container.putExtra("wincomponents", null);
-                        container.saveData();
-                        AppUtils.restartActivity(this);
-                    }
-                    else finish();
+                StorageChecker.Result storageResult = StorageChecker.checkWineprefixUpdate(rootFS.getRootDir(), StorageChecker.dirSize(new File(rootFS.getRootDir(), RootFS.WINEPREFIX)));
+                if (!storageResult.sufficient) {
+                    ContentDialog.alert(this, R.string.not_enough_storage, () -> finish());
+                    return;
+                }
+
+                ContentDialog migrationDialog = new ContentDialog(this);
+                migrationDialog.setCancelable(false);
+                migrationDialog.setTitle(R.string.system_files_migration);
+                migrationDialog.setMessage(R.string.migration_warning, R.drawable.content_dialog_type_confirm);
+                migrationDialog.setOnConfirmCallback(() -> {
+                    preloaderDialog.show(R.string.updating_system_files);
+                    Executors.newSingleThreadExecutor().execute(() -> {
+                        if (rootFS.recoverFromInterruptedLaunch()) {
+                            AppUtils.showToast(this, R.string.restored_previous_system_files);
+                        }
+                        runOnUiThread(() -> WineUtils.updateWineprefix(this, (status) -> {
+                            if (status == 0) {
+                                container.putExtra("wineprefixNeedsUpdate", null);
+                                container.putExtra("wincomponents", null);
+                                container.saveData();
+                                AppUtils.restartActivity(this);
+                            }
+                            else finish();
+                        }));
+                    });
                 });
+                migrationDialog.setOnCancelCallback(() -> finish());
+                migrationDialog.show();
                 return;
             }
 
@@ -230,6 +250,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             this.dxwrapperConfig = DXWrappers.parseConfigs(dxwrapper, dxwrapperConfig);
         }
 
+        rootFS.beginLaunch();
         preloaderDialog.show(R.string.starting_up);
 
         inputControlsManager = new InputControlsManager(this);
@@ -248,6 +269,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                     xServerView.getRenderer().setCursorVisible(true);
                     preloaderDialog.closeOnUiThread();
                     flags[0] = true;
+                    Executors.newSingleThreadExecutor().execute(rootFS::confirmLaunch);
                 }
 
                 if (flags[1] && window.attributes.isViewable() && window.isDesktopWindow()) {
@@ -268,6 +290,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         setupUI();
 
         Executors.newSingleThreadExecutor().execute(() -> {
+            if (rootFS.recoverFromInterruptedLaunch()) {
+                AppUtils.showToast(this, R.string.restored_previous_system_files);
+            }
             if (!isGenerateWineprefix()) {
                 setupWineSystemFiles();
                 extractGraphicsDriverFiles();
