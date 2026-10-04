@@ -8,12 +8,15 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
+import android.hardware.input.InputManager;
 import android.os.Bundle;
 import android.os.Environment;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.MotionEvent;
+import android.view.InputDevice;
+import android.view.PointerIcon;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
@@ -136,6 +139,8 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     private final WinHandler winHandler = new WinHandler(this);
     private float globalCursorSpeed = 1.0f;
     private boolean capturePointerOnExternalMouse = true;
+    private boolean hideSystemCursorOnExternalMouse = true;
+    private InputManager inputManager;
     private MagnifierView magnifierView;
     private DebugDialog debugDialog;
     public int frameRatingWindowId = -1;
@@ -169,6 +174,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         navigationView.setNavigationItemSelectedListener(this);
 
         rootFS = RootFS.find(this);
+
+        inputManager = (InputManager)getSystemService(INPUT_SERVICE);
+        if (inputManager != null) inputManager.registerInputDeviceListener(inputDeviceListener, null);
 
         if (!isGenerateWineprefix()) {
             ContainerManager containerManager = new ContainerManager(this);
@@ -409,10 +417,52 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
     @Override
     protected void onDestroy() {
+        if (inputManager != null) inputManager.unregisterInputDeviceListener(inputDeviceListener);
+        getWindow().getDecorView().setPointerIcon(PointerIcon.getSystemIcon(this, PointerIcon.POINTER_ICON_TYPE_DEFAULT));
         winHandler.stop();
         if (environment != null) environment.stopEnvironmentComponents();
         ForegroundService.stopSession(this);
         super.onDestroy();
+    }
+
+    private final InputManager.InputDeviceListener inputDeviceListener = new InputManager.InputDeviceListener() {
+        @Override
+        public void onInputDeviceAdded(int id) {
+            updateSystemCursorVisibility();
+        }
+
+        @Override
+        public void onInputDeviceRemoved(int id) {
+            updateSystemCursorVisibility();
+        }
+
+        @Override
+        public void onInputDeviceChanged(int id) {
+            updateSystemCursorVisibility();
+        }
+    };
+
+    private static boolean hasDeviceWithSource(int source) {
+        for (int id : InputDevice.getDeviceIds()) {
+            InputDevice device = InputDevice.getDevice(id);
+            if (device != null && !device.isVirtual() && (device.getSources() & source) == source) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Hides the Android system cursor while an external mouse and keyboard are
+     * used with pointer capture (the game draws its own cursor); restores the
+     * default cursor otherwise.
+     */
+    private void updateSystemCursorVisibility() {
+        boolean hide = hideSystemCursorOnExternalMouse
+            && capturePointerOnExternalMouse
+            && hasDeviceWithSource(InputDevice.SOURCE_MOUSE)
+            && hasDeviceWithSource(InputDevice.SOURCE_KEYBOARD);
+
+        int iconType = hide ? PointerIcon.POINTER_ICON_TYPE_NULL : PointerIcon.POINTER_ICON_TYPE_DEFAULT;
+        getWindow().getDecorView().setPointerIcon(PointerIcon.getSystemIcon(this, iconType));
     }
 
     @Override
@@ -661,6 +711,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
         globalCursorSpeed = preferences.getFloat("cursor_speed", 1.0f);
         capturePointerOnExternalMouse = preferences.getBoolean("capture_pointer_on_external_mouse", true);
+        hideSystemCursorOnExternalMouse = preferences.getBoolean("hide_system_cursor_on_external_mouse", true);
         touchpadView = new TouchpadView(this, xServer, capturePointerOnExternalMouse);
         touchpadView.setSensitivity(globalCursorSpeed);
         touchpadView.setMoveCursorToTouchpoint(preferences.getBoolean("move_cursor_to_touchpoint", false));
@@ -668,6 +719,8 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             if (!drawerLayout.isDrawerOpen(GravityCompat.START)) drawerLayout.openDrawer(GravityCompat.START);
         });
         rootView.addView(touchpadView);
+
+        updateSystemCursorVisibility();
 
         inputControlsView = new InputControlsView(this);
         inputControlsView.setOverlayOpacity(preferences.getFloat("overlay_opacity", InputControlsView.DEFAULT_OVERLAY_OPACITY));

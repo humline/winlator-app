@@ -34,6 +34,7 @@
     <string name="unable_to_import_backup">Unable to import backup</string>
     <string name="backup_now">Backup Now</string>
     <string name="continue_without_backup">Continue Without Backup</string>
+    <string name="hide_system_cursor_on_external_mouse">Hide system cursor with external mouse</string>
     <string name="keyboard">Keyboard</string>
     <string name="toggle_fullscreen">Toggle Fullscreen</string>
     <string name="exit">Exit</string>
