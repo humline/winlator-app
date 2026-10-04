@@ -19,8 +19,11 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 
 public abstract class GeneralComponents {
@@ -207,21 +210,80 @@ public abstract class GeneralComponents {
     }
 
     public static void extractFile(Type type, Context context, String identifier, String defaultVersion, TarCompressorUtils.OnExtractFileListener onExtractFileListener) {
-        File destination = type.getDestination(context);
+        extractFileTo(type, context, identifier, defaultVersion, type.getDestination(context), onExtractFileListener);
+    }
 
+    /**
+     * Extracts a component package into a custom destination after verifying
+     * its SHA-256 checksum. Bundled packages are checked against
+     * {@code assets/checksums.txt}; user-installed packages against their
+     * {@code .sha256} sidecar (trust-on-first-use). Falls back to the default
+     * bundled package when the installed one is corrupt.
+     */
+    public static boolean extractFileTo(Type type, Context context, String identifier, String defaultVersion, File destination, TarCompressorUtils.OnExtractFileListener onExtractFileListener) {
         if (isBuiltinComponent(type, identifier)) {
             String sourcePath = type.assetFolder()+"/"+type.lowerName()+"-"+identifier+".tzst";
-            TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, context, sourcePath, destination, onExtractFileListener);
+            return verifyAssetPackage(context, sourcePath)
+                && TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, context, sourcePath, destination, onExtractFileListener);
         }
         else {
             File componentDir = getComponentDir(type, context);
             File source = new File(componentDir, type.lowerName()+"-"+identifier+".tzst");
-            boolean success = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, source, destination, onExtractFileListener);
-            if (!success) {
-                String sourcePath = type.assetFolder()+"/"+type.lowerName()+"-"+defaultVersion+".tzst";
-                TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, context, sourcePath, destination, onExtractFileListener);
-            }
+            if (verifyComponentFile(source) && TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, source, destination, onExtractFileListener)) return true;
+
+            String sourcePath = type.assetFolder()+"/"+type.lowerName()+"-"+defaultVersion+".tzst";
+            return verifyAssetPackage(context, sourcePath)
+                && TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, context, sourcePath, destination, onExtractFileListener);
         }
+    }
+
+    private static final String ASSET_CHECKSUMS_FILENAME = "checksums.txt";
+    private static LinkedHashMap<String, String> assetChecksums;
+
+    /** Loads the bundled package checksums from {@code assets/checksums.txt}. */
+    private static LinkedHashMap<String, String> getAssetChecksums(Context context) {
+        if (assetChecksums == null) {
+            assetChecksums = IntegrityVerifier.parseChecksums(FileUtils.readString(context, ASSET_CHECKSUMS_FILENAME));
+        }
+        return assetChecksums;
+    }
+
+    /**
+     * Verifies a bundled asset package against {@code assets/checksums.txt}.
+     * Packages without a known checksum (e.g. user-installed) are accepted.
+     */
+    public static boolean verifyAssetPackage(Context context, String assetPath) {
+        String expectedHash = getAssetChecksums(context).get(assetPath);
+        if (expectedHash == null) return true;
+
+        try (InputStream inStream = context.getAssets().open(assetPath)) {
+            return expectedHash.equalsIgnoreCase(IntegrityVerifier.sha256(inStream));
+        }
+        catch (IOException e) {
+            return false;
+        }
+    }
+
+    /** Verifies an installed component file against its {@code .sha256} sidecar (if any). */
+    public static boolean verifyComponentFile(File file) {
+        File sidecar = new File(file.getPath()+".sha256");
+        if (!file.isFile() || !sidecar.isFile()) return file.isFile(); // trust-on-first-use
+
+        try {
+            String expectedHash = FileUtils.readString(sidecar).trim().split("\\s+")[0];
+            return expectedHash.equalsIgnoreCase(IntegrityVerifier.sha256(file));
+        }
+        catch (IOException e) {
+            return false;
+        }
+    }
+
+    /** Records the checksum of a freshly installed component file (trust-on-first-use). */
+    public static void writeComponentChecksum(File file) {
+        try {
+            FileUtils.writeString(new File(file.getPath()+".sha256"), IntegrityVerifier.sha256(file));
+        }
+        catch (IOException e) {}
     }
 
     private static String parseDisplayText(Type type, String filename) {
@@ -270,6 +332,7 @@ public abstract class GeneralComponents {
                         final boolean finalVerified = verified;
                         activity.runOnUiThread(() -> {
                             if (finalVerified) {
+                                writeComponentChecksum(destination);
                                 loadSpinner(type, spinner, parseDisplayText(type, filename), defaultItem);
                             } else {
                                 if (destination.isFile()) destination.delete();
@@ -278,6 +341,7 @@ public abstract class GeneralComponents {
                         });
                     });
                 } else {
+                    writeComponentChecksum(destination);
                     loadSpinner(type, spinner, parseDisplayText(type, filename), defaultItem);
                 }
             }
@@ -314,6 +378,7 @@ public abstract class GeneralComponents {
         String filename = type.lowerName()+"-"+identifier+".tzst";
         File destination = new File(componentDir, filename);
         TarCompressorUtils.compress(TarCompressorUtils.Type.ZSTD, new File(tempDir, "/."), destination, MainActivity.CONTAINER_PATTERN_COMPRESSION_LEVEL);
+        writeComponentChecksum(destination);
         FileUtils.delete(tempDir);
     }
 
@@ -329,7 +394,10 @@ public abstract class GeneralComponents {
                         String filename = FileUtils.getName(path);
                         File destination = new File(getComponentDir(type, activity), filename);
                         if (destination.isFile()) FileUtils.delete(destination);
-                        if (FileUtils.copy(source, destination)) loadSpinner(type, spinner, parseDisplayText(type, filename), defaultItem);
+                        if (FileUtils.copy(source, destination)) {
+                            writeComponentChecksum(destination);
+                            loadSpinner(type, spinner, parseDisplayText(type, filename), defaultItem);
+                        }
                         break;
                     }
                     case ADRENOTOOLS_DRIVER: {
@@ -364,7 +432,10 @@ public abstract class GeneralComponents {
                             if (!identifier.isEmpty()) {
                                 File destination = new File(getComponentDir(type, activity), type.lowerName()+"-"+identifier+".tzst");
                                 if (destination.isFile()) FileUtils.delete(destination);
-                                if (FileUtils.copy(source, destination)) loadSpinner(type, spinner, identifier, defaultItem);
+                                if (FileUtils.copy(source, destination)) {
+                                    writeComponentChecksum(destination);
+                                    loadSpinner(type, spinner, identifier, defaultItem);
+                                }
                             }
                         }
                         break;

@@ -49,6 +49,8 @@ import com.winlator.contentdialog.TurnipConfigDialog;
 import com.winlator.contentdialog.VKD3DConfigDialog;
 import com.winlator.contentdialog.VirGLConfigDialog;
 import com.winlator.core.BackupManager;
+import com.winlator.core.StagedInstaller;
+import com.winlator.core.StagedLibSwap;
 import com.winlator.core.StorageChecker;
 import com.winlator.contentdialog.WineD3DConfigDialog;
 import com.winlator.core.AppUtils;
@@ -108,6 +110,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import java.util.concurrent.Executors;
 
 public class XServerDisplayActivity extends AppCompatActivity implements NavigationView.OnNavigationItemSelectedListener {
@@ -853,30 +856,14 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         String currentGraphicsDriver = preferences.getString("current_graphics_driver", "");
         boolean changed = !cacheId.equals(currentGraphicsDriver);
         File rootDir = rootFS.getRootDir();
-        File libDir = rootFS.getLibDir();
 
-        if (changed) {
-            FileUtils.delete(new File(libDir, "libvulkan_freedreno.so"));
-            FileUtils.delete(new File(libDir, "libvulkan_vortek.so"));
-            FileUtils.delete(new File(libDir, "libGL.so.1.7.0"));
-
-            File vulkanICDDir = new File(rootDir, "/usr/share/vulkan/icd.d");
-            FileUtils.delete(vulkanICDDir);
-            vulkanICDDir.mkdirs();
-
-            preferences.edit().putString("current_graphics_driver", cacheId).apply();
-        }
+        // Driver package updates are staged, checksum-verified and validated
+        // before replacing the live libs (rolling back on failure). Per-container
+        // graphicsDriver/graphicsDriverConfig extras are never touched here.
+        if (changed || MainActivity.DEBUG_MODE) refreshGraphicsDriverFiles(changed, cacheId);
 
         if (graphicsDriver[0].equals(GraphicsDrivers.TURNIP)) {
             TurnipConfigDialog.setEnvVars(this, graphicsDriverConfig[0], envVars);
-
-            if (changed) {
-                String version = graphicsDriverConfig[0].get("version", DefaultVersion.TURNIP);
-                GeneralComponents.extractFile(GeneralComponents.Type.TURNIP, this, version, DefaultVersion.TURNIP);
-            }
-        }
-        else if (graphicsDriver[0].equals(GraphicsDrivers.VORTEK) && (changed || MainActivity.DEBUG_MODE)) {
-            TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "graphics_driver/vortek-" + DefaultVersion.VORTEK + ".tzst", rootDir);
         }
 
         switch (graphicsDriver[1]) {
@@ -884,22 +871,102 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                 envVars.put("GALLIUM_DRIVER", "zink");
                 envVars.put("ZINK_CONTEXT_THREADED", "1");
                 if (graphicsDriver[0].equals(GraphicsDrivers.VORTEK)) envVars.put("MESA_GL_VERSION_OVERRIDE", "3.3");
-
-                if (changed) TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "graphics_driver/zink-"+DefaultVersion.ZINK+".tzst", rootDir);
                 break;
             case GraphicsDrivers.VIRGL:
                 envVars.put("GALLIUM_DRIVER", "virpipe");
                 envVars.put("VIRGL_NO_READBACK", "true");
                 envVars.put("VIRGL_SERVER_PATH", rootDir+UnixSocketConfig.VIRGL_SERVER_PATH);
                 VirGLConfigDialog.setEnvVars(graphicsDriverConfig[1], envVars);
-
-                if (changed) TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "graphics_driver/virgl-"+DefaultVersion.VIRGL+".tzst", rootDir);
                 break;
             case GraphicsDrivers.GLADIO:
                 envVars.put("GLADIO_NO_ERROR", "1");
-
-                if (changed || MainActivity.DEBUG_MODE) TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "graphics_driver/gladio-"+DefaultVersion.GLADIO+".tzst", rootDir);
                 break;
+        }
+    }
+
+    /**
+     * Extracts the selected driver packages into a staging directory, verifies
+     * their SHA-256 checksums and swaps them into place, keeping the previous
+     * libvulkan_freedreno.so / libvulkan_vortek.so / libGL.so.1.7.0 as backups
+     * until validation passes. Rolls back on any failure.
+     */
+    private void refreshGraphicsDriverFiles(boolean changed, String cacheId) {
+        File rootDir = rootFS.getRootDir();
+        File stagingDir = new File(rootDir.getParentFile(), "driver_staging");
+        StagedInstaller.deleteRecursive(stagingDir);
+        stagingDir.mkdirs();
+
+        boolean success = true;
+
+        if (graphicsDriver[0].equals(GraphicsDrivers.TURNIP)) {
+            if (changed) {
+                String version = graphicsDriverConfig[0].get("version", DefaultVersion.TURNIP);
+                success = GeneralComponents.extractFileTo(GeneralComponents.Type.TURNIP, this, version, DefaultVersion.TURNIP, stagingDir, null);
+            }
+        }
+        else if (graphicsDriver[0].equals(GraphicsDrivers.VORTEK)) {
+            success = extractVerifiedDriverAsset("graphics_driver/vortek-"+DefaultVersion.VORTEK+".tzst", stagingDir);
+        }
+
+        if (success && changed) {
+            switch (graphicsDriver[1]) {
+                case GraphicsDrivers.ZINK:
+                    success = extractVerifiedDriverAsset("graphics_driver/zink-"+DefaultVersion.ZINK+".tzst", stagingDir);
+                    break;
+                case GraphicsDrivers.VIRGL:
+                    success = extractVerifiedDriverAsset("graphics_driver/virgl-"+DefaultVersion.VIRGL+".tzst", stagingDir);
+                    break;
+                case GraphicsDrivers.GLADIO:
+                    success = extractVerifiedDriverAsset("graphics_driver/gladio-"+DefaultVersion.GLADIO+".tzst", stagingDir);
+                    break;
+            }
+        }
+        else if (success && graphicsDriver[1].equals(GraphicsDrivers.GLADIO)) {
+            success = extractVerifiedDriverAsset("graphics_driver/gladio-"+DefaultVersion.GLADIO+".tzst", stagingDir);
+        }
+
+        if (success) {
+            List<String> swappedPaths = new ArrayList<>();
+            try {
+                StagedLibSwap.swap(stagingDir, rootDir, swappedPaths);
+                List<String> errors = StagedLibSwap.validate(rootDir, swappedPaths);
+                if (errors.isEmpty()) {
+                    StagedLibSwap.commit(rootDir, swappedPaths);
+                    cleanupStaleDriverFiles(swappedPaths);
+                    if (changed) preferences.edit().putString("current_graphics_driver", cacheId).apply();
+                }
+                else {
+                    StagedLibSwap.rollback(rootDir, swappedPaths);
+                    success = false;
+                }
+            }
+            catch (IOException e) {
+                StagedLibSwap.rollback(rootDir, swappedPaths);
+                success = false;
+            }
+        }
+
+        if (!success) AppUtils.showToast(this, R.string.unable_to_install_graphics_driver);
+        StagedInstaller.deleteRecursive(stagingDir);
+    }
+
+    private boolean extractVerifiedDriverAsset(String assetPath, File destination) {
+        return GeneralComponents.verifyAssetPackage(this, assetPath)
+            && TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, assetPath, destination);
+    }
+
+    private void cleanupStaleDriverFiles(List<String> swappedPaths) {
+        String[] driverLibs = {"libvulkan_freedreno.so", "libvulkan_vortek.so", "libGL.so.1.7.0"};
+        for (String name : driverLibs) {
+            if (!swappedPaths.contains("usr/lib/"+name)) FileUtils.delete(new File(rootFS.getLibDir(), name));
+        }
+
+        File vulkanICDDir = new File(rootFS.getRootDir(), "/usr/share/vulkan/icd.d");
+        File[] icdFiles = vulkanICDDir.listFiles();
+        if (icdFiles != null) {
+            for (File file : icdFiles) {
+                if (!swappedPaths.contains("usr/share/vulkan/icd.d/"+file.getName())) FileUtils.delete(file);
+            }
         }
     }
 
