@@ -424,7 +424,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     @Override
     protected void onDestroy() {
         if (inputManager != null) inputManager.unregisterInputDeviceListener(inputDeviceListener);
-        getWindow().getDecorView().setPointerIcon(PointerIcon.getSystemIcon(this, PointerIcon.POINTER_ICON_TYPE_DEFAULT));
+        getWindow().getDecorView().setPointerIcon(null); // restore the default cursor
         if (frameTimeLogger != null) {
             frameTimeLogger.stop();
             MediaScannerConnection.scanFile(this, new String[]{new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Winlator/benchmarks").getAbsolutePath()}, null, null);
@@ -471,8 +471,12 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             && hasDeviceWithSource(InputDevice.SOURCE_MOUSE)
             && hasDeviceWithSource(InputDevice.SOURCE_KEYBOARD);
 
-        int iconType = hide ? PointerIcon.POINTER_ICON_TYPE_NULL : PointerIcon.POINTER_ICON_TYPE_DEFAULT;
-        getWindow().getDecorView().setPointerIcon(PointerIcon.getSystemIcon(this, iconType));
+        // TYPE_NULL hides the system cursor (the game draws its own);
+        // a null icon restores the default Android cursor
+        if (hide) {
+            getWindow().getDecorView().setPointerIcon(PointerIcon.getSystemIcon(this, PointerIcon.TYPE_NULL));
+        }
+        else getWindow().getDecorView().setPointerIcon(null);
     }
 
     @Override

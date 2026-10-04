@@ -43,13 +43,15 @@ public class BackupManagerTest {
 
     @Test
     public void resolveConflictTargetNeverOverwritesExistingData() throws Exception {
-        File preferred = writeFile(folder.getRoot(), "xuser-1/keep.txt", "original");
+        writeFile(folder.getRoot(), "xuser-1/keep.txt", "original");
+        File preferred = new File(folder.getRoot(), "xuser-1");
 
         File target = BackupManager.resolveConflictTarget(preferred);
         assertEquals("xuser-1-restored", target.getName());
         assertFalse(target.exists());
+
         // the existing container is untouched
-        assertEquals("original", new String(Files.readAllBytes(preferred.toPath()), StandardCharsets.UTF_8));
+        assertEquals("original", new String(Files.readAllBytes(new File(preferred, "keep.txt").toPath()), StandardCharsets.UTF_8));
 
         // second restore lands on a fresh name again
         assertTrue(new File(folder.getRoot(), "xuser-1-restored").mkdirs());

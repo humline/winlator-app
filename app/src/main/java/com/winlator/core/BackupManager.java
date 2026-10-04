@@ -86,7 +86,7 @@ public abstract class BackupManager {
             JSONObject manifest = new JSONObject(content);
             return IntegrityVerifier.verifyManifest(manifest, extractedDir);
         }
-        catch (IOException | RuntimeException e) {
+        catch (IOException | JSONException e) {
             errors.add(MANIFEST_FILENAME + " is unreadable (" + e.getMessage() + ")");
             return errors;
         }

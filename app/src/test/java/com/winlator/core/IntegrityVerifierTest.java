@@ -59,7 +59,7 @@ public class IntegrityVerifierTest {
         LinkedHashMap<String, String> checksums = IntegrityVerifier.parseChecksums(SHA256_ABC + " *file.bin\n");
         assertEquals(SHA256_ABC, checksums.get("file.bin"));
 
-        assertTrue(IntegrityVerifier.parseChecksums(null).isEmpty());
+        assertTrue(IntegrityVerifier.parseChecksums((String)null).isEmpty());
     }
 
     @Test

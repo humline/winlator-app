@@ -46,4 +46,5 @@ COPY . .
 RUN chmod +x gradlew
 
 # Build the debug APK and run the JVM unit tests
-RUN ./gradlew --no-daemon assembleDebug testDebugUnitTest
+# (large bundled assets need a bigger Gradle heap than the default)
+RUN ./gradlew --no-daemon -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g" assembleDebug testDebugUnitTest
