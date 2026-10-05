@@ -32,6 +32,24 @@ public abstract class HttpUtils {
         }
     }
 
+    public static String downloadOptionalSync(String url) throws java.io.IOException {
+        HttpURLConnection connection = (HttpURLConnection)(new URL(url)).openConnection();
+        try {
+            int responseCode = connection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) return null;
+            if (responseCode != HttpURLConnection.HTTP_OK) {
+                throw new java.io.IOException("Unexpected HTTP status: " + responseCode);
+            }
+
+            try (InputStream inStream = connection.getInputStream()) {
+                return new String(StreamUtils.copyToByteArray(inStream), StandardCharsets.UTF_8);
+            }
+        }
+        finally {
+            connection.disconnect();
+        }
+    }
+
     public static void download(final String url, final Callback<String> onDownloadComplete) {
         Executors.newSingleThreadExecutor().execute(() -> onDownloadComplete.call(downloadSync(url)));
     }
