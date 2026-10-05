@@ -59,4 +59,26 @@ public class FrameTimeLoggerTest {
         logger.onFrame(); // must stay silent
         logger.stop();
     }
+
+    @Test
+    public void framesSurviveWriterDrainBatches() throws Exception {
+        FrameTimeLogger logger = new FrameTimeLogger(folder.getRoot());
+        assertTrue(logger.start());
+
+        logger.onFrame();
+        logger.onFrame();
+        Thread.sleep(600); // let the background writer drain the first samples
+        logger.onFrame();
+        logger.onFrame();
+        logger.stop();
+
+        File[] files = folder.getRoot().listFiles((dir, name) -> name.endsWith(".csv"));
+        assertEquals(1, files.length);
+
+        // 4 samples produce 3 rows even when written in separate batches
+        String content = new String(Files.readAllBytes(files[0].toPath()), StandardCharsets.UTF_8);
+        String[] lines = content.split("\n");
+        assertEquals(5, lines.length); // header + 3 rows + footer
+        assertTrue(content, content.contains("# total_frames,3"));
+    }
 }
