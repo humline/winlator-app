@@ -53,8 +53,19 @@ public abstract class BackupManager {
     public static final String CONTAINER_REF_FILENAME = "container.json";
     public static final String TYPE_CONTAINER = "container";
     public static final String TYPE_GLOBAL = "global";
+    /** Upper bound for the compressed size of a restored backup (untrusted input). */
+    public static final long MAX_ARCHIVE_BYTES = 4L * 1024 * 1024 * 1024;
     /** Upper bound for the expanded size of a restored backup (untrusted input). */
     public static final long MAX_EXTRACTED_BYTES = 8L * 1024 * 1024 * 1024;
+
+    /**
+     * Free cache space required before extracting a restored backup: roughly
+     * twice the compressed size (typical expansion), with headroom for tiny
+     * archives, bounded by {@link #MAX_EXTRACTED_BYTES}.
+     */
+    public static long restorePreflightBytes(long archiveSize) {
+        return Math.min(Math.max(archiveSize * 2, StorageChecker.HEADROOM_BYTES), MAX_EXTRACTED_BYTES);
+    }
 
     /**
      * Picks a target directory that never overwrites existing data.
@@ -356,12 +367,16 @@ public abstract class BackupManager {
             try (InputStream inStream = context.getContentResolver().openInputStream(source);
                  OutputStream outStream = new FileOutputStream(archiveFile)) {
                 if (inStream == null) throw new IOException("unable to read the source file");
+                // bounded copy: a huge or malicious file cannot fill the cache
+                StreamUtils.copyCapped(inStream, outStream, MAX_ARCHIVE_BYTES);
+            }
 
-                byte[] buffer = new byte[8192];
-                int length;
-                while ((length = inStream.read(buffer)) > 0) {
-                    outStream.write(buffer, 0, length);
-                }
+            // preflight before extracting: the cache must be able to hold the
+            // expanded content (enforced again during extraction via the cap)
+            StorageChecker.Result storageResult = StorageChecker.check(tmpDir, restorePreflightBytes(archiveFile.length()));
+            if (!storageResult.sufficient) {
+                result.errors.add("not enough storage to restore the backup");
+                return result;
             }
 
             File extractedDir = new File(tmpDir, "extracted");

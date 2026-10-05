@@ -51,4 +51,21 @@ public class StreamUtils {
             return false;
         }
     }
+
+    /**
+     * Copies at most {@code maxBytes} bytes ({@code <= 0} = unlimited) and
+     * throws {@link IOException} when the input exceeds the cap, so untrusted
+     * or truncated sources cannot consume unbounded disk space.
+     */
+    public static void copyCapped(InputStream inStream, OutputStream outStream, long maxBytes) throws IOException {
+        byte[] buffer = new byte[BUFFER_SIZE];
+        long total = 0;
+        int amountRead;
+        while ((amountRead = inStream.read(buffer)) != -1) {
+            total += amountRead;
+            if (maxBytes > 0 && total > maxBytes) throw new IOException("input exceeds " + maxBytes + " bytes");
+            outStream.write(buffer, 0, amountRead);
+        }
+        outStream.flush();
+    }
 }

@@ -223,4 +223,14 @@ public class BackupManagerTest {
     public void resolveContainerRefRejectsMissingRef() {
         assertEquals(-1, BackupManager.resolveContainerRef(null, candidatesWithDuplicateName()));
     }
+
+    @Test
+    public void restorePreflightBoundsTheStorageRequirement() {
+        // tiny archives keep a fixed headroom instead of demanding almost nothing
+        assertEquals(StorageChecker.HEADROOM_BYTES, BackupManager.restorePreflightBytes(1000));
+        // typical archives need room for the expanded content
+        assertEquals(200L * 1024 * 1024, BackupManager.restorePreflightBytes(100L * 1024 * 1024));
+        // huge archives never demand more than the extraction cap
+        assertEquals(BackupManager.MAX_EXTRACTED_BYTES, BackupManager.restorePreflightBytes(5L * 1024 * 1024 * 1024));
+    }
 }
