@@ -389,7 +389,10 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         super.onWindowFocusChanged(hasFocus);
 
         if (hasFocus) {
-            if (capturePointerOnExternalMouse) touchpadView.requestPointerCapture();
+            if (capturePointerOnExternalMouse) {
+                touchpadView.requestFocus();
+                touchpadView.requestPointerCapture();
+            }
 
             if (winHandler != null && clipboardManager != null && clipboardManager.hasPrimaryClip()) {
                 ClipData primaryClip = clipboardManager.getPrimaryClip();
