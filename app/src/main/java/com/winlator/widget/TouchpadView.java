@@ -52,8 +52,13 @@ public class TouchpadView extends View implements View.OnCapturedPointerListener
         updateXform(AppUtils.getScreenWidth(), AppUtils.getScreenHeight(), xServer.screenInfo.width, xServer.screenInfo.height);
 
         if (capturePointerOnExternalMouse) {
+            // Captured pointer events are delivered only to the focused view
+            setFocusableInTouchMode(true);
             setOnCapturedPointerListener(this);
-            setOnClickListener(view -> requestPointerCapture());
+            setOnClickListener(view -> {
+                requestFocus();
+                requestPointerCapture();
+            });
         }
     }
 
