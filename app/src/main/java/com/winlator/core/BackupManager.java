@@ -107,26 +107,25 @@ public abstract class BackupManager {
         StagedInstaller.deleteRecursive(stagingDir);
         stagingDir.mkdirs();
 
-        File containerStaging = new File(stagingDir, CONTAINER_DIR);
-        containerStaging.mkdirs();
-        if (!FileUtils.copy(container.getRootDir(), containerStaging, (file) -> FileUtils.chmod(file, 0771))) {
-            StagedInstaller.deleteRecursive(stagingDir);
-            throw new IOException("unable to copy the container directory");
-        }
-        copyProfiles(context, stagingDir);
-
-        JSONObject meta = new JSONObject();
         try {
-            meta.put("type", TYPE_CONTAINER);
-            meta.put("containerName", container.getName());
-            meta.put("wineVersion", container.getWineVersion());
-            meta.put("graphicsDriver", container.getGraphicsDriver());
-            meta.put("graphicsDriverConfig", container.getGraphicsDriverConfig());
-        }
-        catch (JSONException e) {}
+            File containerStaging = new File(stagingDir, CONTAINER_DIR);
+            containerStaging.mkdirs();
+            if (!FileUtils.copy(container.getRootDir(), containerStaging, (file) -> FileUtils.chmod(file, 0771))) {
+                throw new IOException("unable to copy the container directory");
+            }
+            copyProfiles(context, stagingDir);
 
-        File destination = new File(getBackupsDir(), sanitizeFileName(container.getName()) + EXTENSION);
-        try {
+            JSONObject meta = new JSONObject();
+            try {
+                meta.put("type", TYPE_CONTAINER);
+                meta.put("containerName", container.getName());
+                meta.put("wineVersion", container.getWineVersion());
+                meta.put("graphicsDriver", container.getGraphicsDriver());
+                meta.put("graphicsDriverConfig", container.getGraphicsDriverConfig());
+            }
+            catch (JSONException e) {}
+
+            File destination = new File(getBackupsDir(), sanitizeFileName(container.getName()) + EXTENSION);
             return writeArchive(context, stagingDir, destination, meta);
         }
         finally {
@@ -140,28 +139,30 @@ public abstract class BackupManager {
         StagedInstaller.deleteRecursive(stagingDir);
         stagingDir.mkdirs();
 
-        copyProfiles(context, stagingDir);
+        try {
+            copyProfiles(context, stagingDir);
 
-        File shortcutsStaging = new File(stagingDir, SHORTCUTS_DIR);
-        shortcutsStaging.mkdirs();
-        ContainerManager manager = new ContainerManager(context);
-        for (Container container : manager.getContainers()) {
-            File desktopDir = new File(container.getUserDir(), "Desktop");
-            if (desktopDir.isDirectory()) {
-                File target = new File(shortcutsStaging, sanitizeFileName(container.getName()));
-                target.mkdirs();
-                FileUtils.copy(desktopDir, target, (file) -> FileUtils.chmod(file, 0771));
+            File shortcutsStaging = new File(stagingDir, SHORTCUTS_DIR);
+            shortcutsStaging.mkdirs();
+            ContainerManager manager = new ContainerManager(context);
+            for (Container container : manager.getContainers()) {
+                File desktopDir = new File(container.getUserDir(), "Desktop");
+                if (desktopDir.isDirectory()) {
+                    File target = new File(shortcutsStaging, sanitizeFileName(container.getName()));
+                    target.mkdirs();
+                    if (!FileUtils.copy(desktopDir, target, (file) -> FileUtils.chmod(file, 0771))) {
+                        throw new IOException("unable to copy the shortcuts of " + container.getName());
+                    }
+                }
             }
-        }
 
-        JSONObject meta = new JSONObject();
-        try {
-            meta.put("type", TYPE_GLOBAL);
-        }
-        catch (JSONException e) {}
+            JSONObject meta = new JSONObject();
+            try {
+                meta.put("type", TYPE_GLOBAL);
+            }
+            catch (JSONException e) {}
 
-        File destination = new File(getBackupsDir(), "winlator-backup" + EXTENSION);
-        try {
+            File destination = new File(getBackupsDir(), "winlator-backup" + EXTENSION);
             return writeArchive(context, stagingDir, destination, meta);
         }
         finally {
@@ -169,12 +170,14 @@ public abstract class BackupManager {
         }
     }
 
-    private static void copyProfiles(Context context, File stagingDir) {
+    private static void copyProfiles(Context context, File stagingDir) throws IOException {
         File profilesDir = InputControlsManager.getProfilesDir(context);
         if (profilesDir.isDirectory()) {
             File profilesStaging = new File(stagingDir, PROFILES_DIR);
             profilesStaging.mkdirs();
-            FileUtils.copy(profilesDir, profilesStaging, (file) -> FileUtils.chmod(file, 0771));
+            if (!FileUtils.copy(profilesDir, profilesStaging, (file) -> FileUtils.chmod(file, 0771))) {
+                throw new IOException("unable to copy the input profiles");
+            }
         }
     }
 
