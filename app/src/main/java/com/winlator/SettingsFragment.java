@@ -100,16 +100,20 @@ public class SettingsFragment extends Fragment {
 
     @Override
     public void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
-        if (requestCode == MainActivity.OPEN_FILE_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
-            try {
-                if (selectWineFileCallback != null && data != null) selectWineFileCallback.call(data.getData());
-                else if (selectBackupFileCallback != null && data != null) selectBackupFileCallback.call(data.getData());
-            }
-            catch (Exception e) {
-                AppUtils.showToast(getContext(), selectWineFileCallback != null ? R.string.unable_to_import_profile : R.string.unable_to_import_backup);
-            }
-            selectWineFileCallback = null;
-            selectBackupFileCallback = null;
+        if (requestCode != MainActivity.OPEN_FILE_REQUEST_CODE) return;
+
+        boolean importingWine = selectWineFileCallback != null;
+        Callback<Uri> callback = importingWine ? selectWineFileCallback : selectBackupFileCallback;
+        selectWineFileCallback = null;
+        selectBackupFileCallback = null;
+
+        if (resultCode != Activity.RESULT_OK || data == null || callback == null) return;
+
+        try {
+            callback.call(data.getData());
+        }
+        catch (Exception e) {
+            AppUtils.showToast(getContext(), importingWine ? R.string.unable_to_import_profile : R.string.unable_to_import_backup);
         }
     }
 
