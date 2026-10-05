@@ -10,6 +10,7 @@ import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -17,6 +18,7 @@ import java.nio.file.Files;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class TarCompressorUtilsTest {
     @Rule
@@ -179,5 +181,17 @@ public class TarCompressorUtilsTest {
 
         assertTrue(TarCompressorUtils.extractSafe(TarCompressorUtils.Type.XZ, archive, dest, 0));
         assertTrue(new File(dest, "a/b/c.txt").isFile());
+    }
+
+    @Test
+    public void compressPropagatesIoFailures() throws Exception {
+        File blocker = folder.newFile("blocker");
+        File destination = new File(blocker, "sub/archive.tar.xz"); // parent is a file
+
+        try {
+            TarCompressorUtils.compress(TarCompressorUtils.Type.XZ, folder.getRoot(), destination, 3);
+            fail("expected IOException when the destination cannot be written");
+        }
+        catch (IOException expected) {}
     }
 }

@@ -377,8 +377,14 @@ public abstract class GeneralComponents {
 
         String filename = type.lowerName()+"-"+identifier+".tzst";
         File destination = new File(componentDir, filename);
-        TarCompressorUtils.compress(TarCompressorUtils.Type.ZSTD, new File(tempDir, "/."), destination, MainActivity.CONTAINER_PATTERN_COMPRESSION_LEVEL);
-        writeComponentChecksum(destination);
+        try {
+            TarCompressorUtils.compress(TarCompressorUtils.Type.ZSTD, new File(tempDir, "/."), destination, MainActivity.CONTAINER_PATTERN_COMPRESSION_LEVEL);
+            writeComponentChecksum(destination);
+        }
+        catch (IOException e) {
+            // never keep a broken package without a recorded checksum
+            FileUtils.delete(destination);
+        }
         FileUtils.delete(tempDir);
     }
 

@@ -6,6 +6,8 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.List;
@@ -13,6 +15,7 @@ import java.util.List;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class BackupManagerTest {
     @Rule
@@ -94,5 +97,64 @@ public class BackupManagerTest {
         List<String> errors = BackupManager.verify(extracted);
         assertFalse(errors.isEmpty());
         assertTrue(errors.get(0), errors.get(0).contains("unreadable"));
+    }
+
+    private File buildArchiveFrom(File staging) throws Exception {
+        JSONObject manifest = BackupManager.buildManifest(staging, null);
+        writeFile(staging, BackupManager.MANIFEST_FILENAME, manifest.toString());
+        File archive = new File(folder.getRoot(), "backup" + BackupManager.EXTENSION);
+        TarCompressorUtils.compress(TarCompressorUtils.Type.XZ, staging.listFiles(), archive, 3);
+        return archive;
+    }
+
+    @Test
+    public void verifyArchiveAcceptsCompleteArchive() throws Exception {
+        File staging = folder.newFolder("staging");
+        writeFile(staging, BackupManager.CONTAINER_DIR + "/xuser-1.conf", "name=Test");
+        writeFile(staging, BackupManager.SHORTCUTS_DIR + "/game.shortcut", "shortcut-data");
+        File archive = buildArchiveFrom(staging);
+        File workDir = new File(folder.getRoot(), "verify-work");
+
+        BackupManager.verifyArchive(TarCompressorUtils.Type.XZ, archive, workDir);
+        assertFalse(workDir.exists()); // work dir is cleaned up after verification
+    }
+
+    @Test
+    public void verifyArchiveRejectsTruncatedArchive() throws Exception {
+        File staging = folder.newFolder("staging");
+        writeFile(staging, BackupManager.CONTAINER_DIR + "/xuser-1.conf", "name=Test");
+        File archive = buildArchiveFrom(staging);
+
+        try (RandomAccessFile raf = new RandomAccessFile(archive, "rw")) {
+            raf.setLength(raf.length() / 2);
+        }
+
+        try {
+            BackupManager.verifyArchive(TarCompressorUtils.Type.XZ, archive, new File(folder.getRoot(), "verify-work"));
+            fail("expected IOException for a truncated archive");
+        }
+        catch (IOException expected) {}
+    }
+
+    @Test
+    public void verifyArchiveRejectsArchiveMissingManifestFiles() throws Exception {
+        File staging = folder.newFolder("staging");
+        writeFile(staging, BackupManager.CONTAINER_DIR + "/xuser-1.conf", "name=Test");
+        writeFile(staging, BackupManager.CONTAINER_DIR + "/omitted.txt", "missing-from-archive");
+
+        // the manifest lists every staged file...
+        JSONObject manifest = BackupManager.buildManifest(staging, null);
+        writeFile(staging, BackupManager.MANIFEST_FILENAME, manifest.toString());
+
+        // ...but the archive silently omits one of them
+        assertTrue(new File(staging, BackupManager.CONTAINER_DIR + "/omitted.txt").delete());
+        File archive = new File(folder.getRoot(), "backup" + BackupManager.EXTENSION);
+        TarCompressorUtils.compress(TarCompressorUtils.Type.XZ, staging.listFiles(), archive, 3);
+
+        try {
+            BackupManager.verifyArchive(TarCompressorUtils.Type.XZ, archive, new File(folder.getRoot(), "verify-work"));
+            fail("expected IOException for a silently incomplete archive");
+        }
+        catch (IOException expected) {}
     }
 }

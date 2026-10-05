@@ -24,6 +24,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
@@ -192,11 +193,12 @@ public abstract class RootFSInstaller {
                 File outputFile = new File(activity.getCacheDir(), "container_pattern.tzst");
                 FileUtils.delete(outputFile);
                 TarCompressorUtils.compress(TarCompressorUtils.Type.ZSTD, new File(containerPatternDir, ".wine"), outputFile, 22);
-
+            }
+            catch (JSONException | IOException e) {}
+            finally {
                 FileUtils.delete(containerPatternDir);
                 preloaderDialog.closeOnUiThread();
             }
-            catch (JSONException e) {}
         });
     }
 }

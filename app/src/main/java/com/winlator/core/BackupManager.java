@@ -192,11 +192,40 @@ public abstract class BackupManager {
         File parent = destination.getParentFile();
         if (parent != null) parent.mkdirs();
 
-        TarCompressorUtils.compress(TarCompressorUtils.Type.ZSTD, stagingDir.listFiles(), destination, 3);
-        if (!destination.isFile()) throw new IOException("unable to write the backup archive");
+        try {
+            TarCompressorUtils.compress(TarCompressorUtils.Type.ZSTD, stagingDir.listFiles(), destination, 3);
+            if (!destination.isFile()) throw new IOException("unable to write the backup archive");
+            // an incomplete archive must never be reported as a successful backup
+            // (the migration flow relies on this to decide whether it may proceed)
+            verifyArchive(TarCompressorUtils.Type.ZSTD, destination, new File(context.getCacheDir(), "wcb_verify"));
+        }
+        catch (IOException e) {
+            StagedInstaller.deleteRecursive(destination);
+            throw e;
+        }
 
         MediaScannerConnection.scanFile(context, new String[]{destination.getAbsolutePath()}, null, null);
         return destination;
+    }
+
+    /**
+     * Extracts a finished backup archive and verifies its manifest, so
+     * truncated or silently incomplete archives are detected before the export
+     * is reported as successful. Throws {@link IOException} on any problem.
+     */
+    public static void verifyArchive(TarCompressorUtils.Type type, File archive, File workDir) throws IOException {
+        try {
+            StagedInstaller.deleteRecursive(workDir);
+            workDir.mkdirs();
+            if (!TarCompressorUtils.extractSafe(type, archive, workDir, MAX_EXTRACTED_BYTES)) {
+                throw new IOException("the backup archive is unreadable");
+            }
+            List<String> errors = verify(workDir);
+            if (!errors.isEmpty()) throw new IOException("the backup archive failed verification (" + errors.get(0) + ")");
+        }
+        finally {
+            StagedInstaller.deleteRecursive(workDir);
+        }
     }
 
     private static File getBackupsDir() {
