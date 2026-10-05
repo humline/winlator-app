@@ -51,6 +51,8 @@ public abstract class BackupManager {
     public static final String PROFILES_DIR = "profiles";
     public static final String TYPE_CONTAINER = "container";
     public static final String TYPE_GLOBAL = "global";
+    /** Upper bound for the expanded size of a restored backup (untrusted input). */
+    public static final long MAX_EXTRACTED_BYTES = 8L * 1024 * 1024 * 1024;
 
     /**
      * Picks a target directory that never overwrites existing data.
@@ -251,7 +253,8 @@ public abstract class BackupManager {
 
             File extractedDir = new File(tmpDir, "extracted");
             extractedDir.mkdirs();
-            if (!TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, archiveFile, extractedDir)) {
+            // untrusted input: strict path containment and size cap during extraction
+            if (!TarCompressorUtils.extractSafe(TarCompressorUtils.Type.ZSTD, archiveFile, extractedDir, MAX_EXTRACTED_BYTES)) {
                 result.errors.add("unable to extract the backup archive");
                 return result;
             }

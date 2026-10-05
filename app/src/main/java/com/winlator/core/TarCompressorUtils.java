@@ -182,6 +182,78 @@ public abstract class TarCompressorUtils {
         }
     }
 
+    /**
+     * Checks that a tar entry name cannot escape the extraction directory:
+     * absolute paths (unix or windows style) and {@code ..} segments are
+     * rejected. Pure logic, validated by {@code TarCompressorUtilsTest}.
+     */
+    public static boolean isSafeEntryName(String name) {
+        if (name == null || name.isEmpty()) return false;
+
+        String normalized = name.replace('\\', '/');
+        if (normalized.startsWith("/")) return false;
+        if (normalized.length() >= 2 && normalized.charAt(1) == ':') return false; // windows drive
+
+        for (String segment : normalized.split("/")) {
+            if (segment.equals("..")) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Extracts an <em>untrusted</em> archive with strict containment. Absolute
+     * entry names, {@code ..} segments and symlink / hard-link / device entries
+     * are rejected (they can redirect later writes outside the destination),
+     * every written file must stay inside {@code destination} (canonical paths)
+     * and the total extracted size is capped at {@code maxTotalBytes}
+     * ({@code <= 0} = unlimited). Aborts and returns {@code false} on the first
+     * violation; partial output is left for the caller to clean up.
+     */
+    public static boolean extractSafe(Type type, File source, File destination, long maxTotalBytes) {
+        if (source == null || !source.isFile()) return false;
+        try (InputStream inStream = getCompressorInputStream(type, new BufferedInputStream(new FileInputStream(source), StreamUtils.BUFFER_SIZE));
+             ArchiveInputStream tar = new TarArchiveInputStream(inStream)) {
+            String destPath = destination.getCanonicalPath();
+            long totalSize = 0;
+            TarArchiveEntry entry;
+            while ((entry = (TarArchiveEntry)tar.getNextEntry()) != null) {
+                if (!tar.canReadEntryData(entry)) continue;
+                if (!isSafeEntryName(entry.getName())) return false;
+
+                File file = new File(destination, entry.getName());
+                String filePath = file.getCanonicalPath();
+
+                if (entry.isDirectory()) {
+                    if (filePath.equals(destPath)) continue;
+                    if (!filePath.startsWith(destPath + File.separator)) return false;
+                    if (!file.isDirectory() && !file.mkdirs()) return false;
+                    continue;
+                }
+
+                // special entries can redirect later writes outside the destination
+                if (entry.isSymbolicLink() || entry.isLink() || entry.isFIFO() ||
+                    entry.isCharacterDevice() || entry.isBlockDevice()) return false;
+
+                if (!filePath.startsWith(destPath + File.separator)) return false;
+
+                totalSize += entry.getSize();
+                if (maxTotalBytes > 0 && totalSize > maxTotalBytes) return false;
+
+                File parent = file.getParentFile();
+                if (parent != null && !parent.isDirectory() && !parent.mkdirs()) return false;
+
+                try (BufferedOutputStream outStream = new BufferedOutputStream(new FileOutputStream(file), StreamUtils.BUFFER_SIZE)) {
+                    if (!StreamUtils.copy(tar, outStream)) return false;
+                }
+                FileUtils.chmod(file, 0771);
+            }
+            return true;
+        }
+        catch (IOException e) {
+            return false;
+        }
+    }
+
     public static long getContentLength(Type type, Context context, String assetFile, File destination) {
         AtomicLong totalSizeRef = new AtomicLong();
         extract(type, context, assetFile, destination, (file, size) -> {
