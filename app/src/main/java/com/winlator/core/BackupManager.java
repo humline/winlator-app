@@ -49,6 +49,8 @@ public abstract class BackupManager {
     public static final String CONTAINER_DIR = "container";
     public static final String SHORTCUTS_DIR = "shortcuts";
     public static final String PROFILES_DIR = "profiles";
+    /** Stable container reference stored inside each shortcut group of a global backup. */
+    public static final String CONTAINER_REF_FILENAME = "container.json";
     public static final String TYPE_CONTAINER = "container";
     public static final String TYPE_GLOBAL = "global";
     /** Upper bound for the expanded size of a restored backup (untrusted input). */
@@ -68,6 +70,78 @@ public abstract class BackupManager {
             target = new File(preferred.getParentFile(), preferred.getName() + suffix);
         }
         return target;
+    }
+
+    /**
+     * Name of a shortcut group inside a global backup. Keyed by the stable
+     * container id so same-named containers can never merge into one group.
+     */
+    public static String shortcutsFolderName(int containerId) {
+        return "c" + containerId;
+    }
+
+    /** Identity of the container a shortcut group belongs to. */
+    public static class ContainerRef {
+        public final int id;
+        public final String name;
+
+        public ContainerRef(int id, String name) {
+            this.id = id;
+            this.name = name != null ? name : "";
+        }
+    }
+
+    /** Serializes a {@link ContainerRef} for {@link #CONTAINER_REF_FILENAME}. */
+    public static String containerRefJson(int id, String name) {
+        try {
+            JSONObject data = new JSONObject();
+            data.put("id", id);
+            data.put("name", name != null ? name : "");
+            return data.toString();
+        }
+        catch (JSONException e) {
+            return null;
+        }
+    }
+
+    /** Parses the {@link #CONTAINER_REF_FILENAME} of a shortcut group ({@code null} when absent or malformed). */
+    public static ContainerRef parseContainerRef(String json) {
+        if (json == null) return null;
+        try {
+            JSONObject data = new JSONObject(json);
+            return new ContainerRef(data.optInt("id", -1), data.optString("name", ""));
+        }
+        catch (JSONException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Resolves the container of a shortcut group explicitly: exact id+name
+     * match first, then a unique name match (restored containers get fresh
+     * ids), then the id match (same device, renamed container). Returns the
+     * index into {@code candidates} or {@code -1} when the reference is
+     * missing or only ambiguous candidates exist.
+     */
+    public static int resolveContainerRef(ContainerRef ref, List<ContainerRef> candidates) {
+        if (ref == null || candidates == null) return -1;
+
+        int idMatch = -1;
+        int nameMatch = -1;
+        int nameMatches = 0;
+
+        for (int i = 0; i < candidates.size(); i++) {
+            ContainerRef candidate = candidates.get(i);
+            if (candidate.id == ref.id) idMatch = i;
+            if (candidate.name.equals(ref.name)) {
+                nameMatch = i;
+                nameMatches++;
+            }
+        }
+
+        if (idMatch != -1 && candidates.get(idMatch).name.equals(ref.name)) return idMatch;
+        if (nameMatches == 1) return nameMatch;
+        return idMatch;
     }
 
     /**
@@ -148,10 +222,17 @@ public abstract class BackupManager {
             for (Container container : manager.getContainers()) {
                 File desktopDir = new File(container.getUserDir(), "Desktop");
                 if (desktopDir.isDirectory()) {
-                    File target = new File(shortcutsStaging, sanitizeFileName(container.getName()));
+                    // key by the stable container id so same-named containers
+                    // can never merge into one shortcut group
+                    File target = new File(shortcutsStaging, shortcutsFolderName(container.id));
                     target.mkdirs();
                     if (!FileUtils.copy(desktopDir, target, (file) -> FileUtils.chmod(file, 0771))) {
                         throw new IOException("unable to copy the shortcuts of " + container.getName());
+                    }
+
+                    String refJson = containerRefJson(container.id, container.getName());
+                    if (refJson == null || !FileUtils.writeString(new File(target, CONTAINER_REF_FILENAME), refJson)) {
+                        throw new IOException("unable to record the container reference of " + container.getName());
                     }
                 }
             }
@@ -361,17 +442,14 @@ public abstract class BackupManager {
         if (folders == null) return;
 
         ContainerManager manager = new ContainerManager(context);
+        List<Container> containers = manager.getContainers();
+        List<ContainerRef> candidates = new ArrayList<>();
+        for (Container container : containers) candidates.add(new ContainerRef(container.id, container.getName()));
+
         for (File folder : folders) {
             if (!folder.isDirectory()) continue;
 
-            Container target = null;
-            for (Container container : manager.getContainers()) {
-                if (sanitizeFileName(container.getName()).equals(folder.getName())) {
-                    target = container;
-                    break;
-                }
-            }
-
+            Container target = resolveShortcutContainer(folder, containers, candidates);
             if (target == null) {
                 result.conflicts.add(folder.getName() + ": container not found, shortcuts skipped");
                 continue;
@@ -383,7 +461,7 @@ public abstract class BackupManager {
             if (files == null) continue;
 
             for (File file : files) {
-                if (!file.isFile()) continue;
+                if (!file.isFile() || file.getName().equals(CONTAINER_REF_FILENAME)) continue;
 
                 File destination = new File(desktopDir, file.getName());
                 if (destination.exists()) {
@@ -395,6 +473,37 @@ public abstract class BackupManager {
                     result.errors.add(file.getName() + ": unable to restore the shortcut");
                 }
             }
+        }
+    }
+
+    /**
+     * Resolves the container of a shortcut group via its stable
+     * {@link #CONTAINER_REF_FILENAME}; legacy archives without the reference
+     * are matched by a unique sanitized container name (never guessed).
+     */
+    private static Container resolveShortcutContainer(File folder, List<Container> containers, List<ContainerRef> candidates) {
+        ContainerRef ref = parseContainerRef(readStringOrNull(new File(folder, CONTAINER_REF_FILENAME)));
+        if (ref != null) {
+            int index = resolveContainerRef(ref, candidates);
+            return index != -1 ? containers.get(index) : null;
+        }
+
+        Container found = null;
+        for (Container container : containers) {
+            if (sanitizeFileName(container.getName()).equals(folder.getName())) {
+                if (found != null) return null; // ambiguous name: never guess
+                found = container;
+            }
+        }
+        return found;
+    }
+
+    private static String readStringOrNull(File file) {
+        try {
+            return file.isFile() ? new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8) : null;
+        }
+        catch (IOException e) {
+            return null;
         }
     }
 }
