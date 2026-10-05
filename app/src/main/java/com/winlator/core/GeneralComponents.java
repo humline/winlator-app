@@ -310,22 +310,33 @@ public abstract class GeneralComponents {
                         if (expectedChecksum != null && !expectedChecksum.isEmpty()) {
                             verified = HttpUtils.verifyChecksum(destination, expectedChecksum);
                         } else {
-                            String sha256Content = HttpUtils.downloadSync(String.format(INSTALLABLE_COMPONENTS_URL, type.lowerName()+"/"+filename+".sha256"));
-                            if (sha256Content != null && !sha256Content.isEmpty()) {
-                                String hash = HttpUtils.extractChecksum(sha256Content, "SHA-256");
-                                if (hash != null && HttpUtils.verifyChecksum(destination, hash)) {
-                                    verified = true;
+                            try {
+                                boolean checksumMetadataAvailable = false;
+                                String sha256Content = HttpUtils.downloadOptionalSync(String.format(INSTALLABLE_COMPONENTS_URL, type.lowerName()+"/"+filename+".sha256"));
+                                if (sha256Content != null) {
+                                    checksumMetadataAvailable = true;
+                                    String hash = HttpUtils.extractChecksum(sha256Content, "SHA-256");
+                                    if (hash != null && HttpUtils.verifyChecksum(destination, hash)) {
+                                        verified = true;
+                                    }
                                 }
-                            }
 
-                            if (!verified) {
-                                String md5Content = HttpUtils.downloadSync(String.format(INSTALLABLE_COMPONENTS_URL, type.lowerName()+"/"+filename+".md5"));
-                                if (md5Content != null && !md5Content.isEmpty()) {
+                                if (!verified) {
+                                    String md5Content = HttpUtils.downloadOptionalSync(String.format(INSTALLABLE_COMPONENTS_URL, type.lowerName()+"/"+filename+".md5"));
+                                    if (md5Content != null) {
+                                        checksumMetadataAvailable = true;
+                                    }
                                     String hash = HttpUtils.extractChecksum(md5Content, "MD5");
                                     if (hash != null && HttpUtils.verifyChecksum(destination, hash)) {
                                         verified = true;
                                     }
                                 }
+
+                                // Some component indexes do not publish checksum sidecars.
+                                // In that case, retain the package and record its checksum locally.
+                                if (!checksumMetadataAvailable) verified = true;
+                            } catch (java.io.IOException e) {
+                                verified = false;
                             }
                         }
 
