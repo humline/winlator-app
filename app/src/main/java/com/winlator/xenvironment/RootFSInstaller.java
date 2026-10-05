@@ -91,8 +91,10 @@ public abstract class RootFSInstaller {
                 return file;
             });
 
-            // validate the staged rootfs and switch it into place (with rollback)
-            success = success && StagedInstaller.commit(rootDir, stagingDir, rootFS.getBackupDir());
+            // validate the staged rootfs (required paths + expected size) and
+            // switch it into place (with rollback)
+            success = success && StagedInstaller.validate(stagingDir, contentLength).valid
+                && StagedInstaller.commit(rootDir, stagingDir, rootFS.getBackupDir());
 
             if (success) {
                 rootFS.createRFSVersionFile(LATEST_VERSION);

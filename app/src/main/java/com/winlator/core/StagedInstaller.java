@@ -19,8 +19,14 @@ import java.util.List;
 public abstract class StagedInstaller {
     /** Paths inside the rootfs holding user data that must survive a system update. */
     public static final String[] PRESERVED_PATHS = {"home", "opt/installed-wine"};
-    /** Directories that must exist in a freshly extracted rootfs to consider it valid. */
-    public static final String[] REQUIRED_PATHS = {"etc", "opt/wine"};
+    /**
+     * Directories that must exist in a freshly extracted rootfs to consider it
+     * valid (verified against the shipped rootfs.tzst). {@code .winlator} is
+     * intentionally not required: it is created by
+     * {@code RootFS.createRFSVersionFile()} after the install, not shipped in
+     * the archive.
+     */
+    public static final String[] REQUIRED_PATHS = {"etc", "opt/wine", "tmp", "home"};
     /** Guards against extracting an empty/truncated archive. */
     public static final int MIN_ENTRY_COUNT = 10;
 
@@ -35,6 +41,15 @@ public abstract class StagedInstaller {
     }
 
     public static ValidationResult validate(File stagingDir) {
+        return validate(stagingDir, -1);
+    }
+
+    /**
+     * Validates a staged rootfs, optionally against the expected extracted
+     * size ({@code expectedSize < 0} = skip the size check) to catch extracts
+     * that silently ended early.
+     */
+    public static ValidationResult validate(File stagingDir, long expectedSize) {
         List<String> errors = new ArrayList<>();
         if (stagingDir == null || !stagingDir.isDirectory()) {
             errors.add("staging directory is missing");
@@ -49,6 +64,10 @@ public abstract class StagedInstaller {
 
         if (countEntries(stagingDir) < MIN_ENTRY_COUNT) {
             errors.add("staging directory looks empty or truncated");
+        }
+
+        if (expectedSize >= 0 && StorageChecker.dirSize(stagingDir) < expectedSize) {
+            errors.add("staging directory is truncated (less content than the archive)");
         }
         return new ValidationResult(errors.isEmpty(), errors);
     }

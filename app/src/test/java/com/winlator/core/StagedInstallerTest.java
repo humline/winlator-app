@@ -45,6 +45,8 @@ public class StagedInstallerTest {
         writeFile(staging, "etc/old.conf", "new-old");
         writeFile(staging, "opt/wine/bin/wine", "new-wine");
         writeFile(staging, "usr/lib/libEGL.so", "new-lib");
+        writeFile(staging, "tmp/.keep", "");
+        writeFile(staging, "home/.keep", "");
         for (int i = 0; i < 5; i++) writeFile(staging, "usr/share/f" + i, "x");
         return staging;
     }
@@ -80,6 +82,30 @@ public class StagedInstallerTest {
         StagedInstaller.ValidationResult result = StagedInstaller.validate(staging);
         assertFalse(result.valid);
         assertTrue(result.errors.toString(), result.errors.toString().contains("empty or truncated"));
+    }
+
+    @Test
+    public void validateRejectsMissingRequiredUserPath() throws Exception {
+        File staging = buildStaging();
+        assertTrue(StagedInstaller.deleteRecursive(new File(staging, "tmp")));
+
+        StagedInstaller.ValidationResult result = StagedInstaller.validate(staging);
+        assertFalse(result.valid);
+        assertTrue(result.errors.toString(), result.errors.toString().contains("tmp"));
+    }
+
+    @Test
+    public void validateFlagsSizeTruncatedStaging() throws Exception {
+        File staging = buildStaging();
+        long expectedSize = StorageChecker.dirSize(staging);
+        assertTrue(new File(staging, "usr/lib/libEGL.so").delete());
+
+        // without a size expectation the staging still looks complete
+        assertTrue(StagedInstaller.validate(staging).valid);
+
+        StagedInstaller.ValidationResult result = StagedInstaller.validate(staging, expectedSize);
+        assertFalse(result.valid);
+        assertTrue(result.errors.toString(), result.errors.toString().contains("truncated"));
     }
     @Test
     public void commitSwitchesSystemAndPreservesUserData() throws Exception {
