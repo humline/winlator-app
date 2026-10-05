@@ -38,13 +38,14 @@ public abstract class StorageChecker {
     }
 
     /**
-     * A staged rootfs install keeps the live rootfs plus a full staging copy
-     * until the switch completes, so roughly twice the extracted size is needed.
+     * A staged rootfs install renames the live rootfs to a backup and the
+     * staging copy into place, so the only additional space needed is the
+     * staging copy itself plus headroom (no second full copy is created).
      *
      * @param extractedSize total size of the extracted rootfs content
      */
     public static Result checkRootfsInstall(File rootDir, long extractedSize) {
-        return check(rootDir, extractedSize * 2 + HEADROOM_BYTES);
+        return check(rootDir, extractedSize + HEADROOM_BYTES);
     }
 
     /** An in-place wineprefix update runs wineboot and needs scratch space. */

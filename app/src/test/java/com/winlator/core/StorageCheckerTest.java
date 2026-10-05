@@ -39,8 +39,9 @@ public class StorageCheckerTest {
 
     @Test
     public void rootfsInstallRequiresStagingCopyPlusHeadroom() {
+        // the live rootfs is renamed, not copied: only the staging copy is extra
         StorageChecker.Result result = StorageChecker.checkRootfsInstall(folder.getRoot(), 1000);
-        assertEquals(2000 + StorageChecker.HEADROOM_BYTES, result.requiredBytes);
+        assertEquals(1000 + StorageChecker.HEADROOM_BYTES, result.requiredBytes);
     }
 
     @Test
