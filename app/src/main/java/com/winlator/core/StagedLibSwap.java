@@ -56,8 +56,11 @@ public abstract class StagedLibSwap {
                 if (!target.renameTo(backup)) throw new IOException("unable to back up " + relativePath);
             }
 
-            if (!file.renameTo(target)) throw new IOException("unable to install " + relativePath);
+            // record before the install rename: when it fails after the backup
+            // was taken, caller rollback must still restore the .bak file,
+            // otherwise the active library stays missing
             moved.add(relativePath);
+            if (!file.renameTo(target)) throw new IOException("unable to install " + relativePath);
         }
     }
 

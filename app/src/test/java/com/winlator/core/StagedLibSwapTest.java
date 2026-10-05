@@ -5,13 +5,16 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class StagedLibSwapTest {
     @Rule
@@ -105,5 +108,30 @@ public class StagedLibSwapTest {
 
         assertEquals("new-lib", readFile(root, "usr/lib/libGL.so.1.7.0"));
         assertFalse(new File(root, "usr/lib/libGL.so.1.7.0" + StagedLibSwap.BACKUP_SUFFIX).exists());
+    }
+
+    @Test
+    public void failedInstallAfterBackupIsRecordedForRollback() throws Exception {
+        // staging == root makes the install rename fail deterministically:
+        // the target is first renamed to .bak, so the staged file (same path)
+        // no longer exists when the install rename runs
+        File root = folder.newFolder("rootfs");
+        writeFile(root, "libGL.so.1.7.0", "old-lib");
+
+        List<String> moved = new ArrayList<>();
+        try {
+            StagedLibSwap.swap(root, root, moved);
+            fail("expected IOException when the install rename fails");
+        }
+        catch (IOException expected) {}
+
+        // the path must be recorded although the install failed, otherwise the
+        // caller rollback would skip the .bak backup and the library stays missing
+        assertEquals(1, moved.size());
+        assertEquals("libGL.so.1.7.0", moved.get(0));
+
+        assertTrue(StagedLibSwap.rollback(root, moved));
+        assertEquals("old-lib", readFile(root, "libGL.so.1.7.0"));
+        assertFalse(new File(root, "libGL.so.1.7.0" + StagedLibSwap.BACKUP_SUFFIX).exists());
     }
 }
