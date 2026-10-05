@@ -262,7 +262,7 @@ public abstract class BackupManager {
      * Restores a {@code .wcb} backup (container and/or global). Checksums are
      * verified first and existing data is never overwritten: containers get a
      * fresh id, conflicting shortcut files are renamed and same-name profiles
-     * are reported as conflicts.
+     * are reported as conflicts and skipped.
      */
     public static RestoreResult restore(Context context, Uri source) {
         RestoreResult result = new RestoreResult();
@@ -332,12 +332,18 @@ public abstract class BackupManager {
                 JSONObject data = new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
                 String name = data.optString("name", file.getName());
 
+                boolean conflict = false;
                 for (ControlsProfile profile : existingProfiles) {
                     if (profile.getName().equals(name)) {
                         result.conflicts.add(name);
+                        conflict = true;
                         break;
                     }
                 }
+                // existing data is never modified: the same-name profile is kept
+                // untouched and the imported copy is skipped, so a restart cannot
+                // resurrect a duplicate
+                if (conflict) continue;
 
                 if (inputControlsManager.importProfile(data) == null) {
                     result.errors.add(name + ": unable to import the profile");
