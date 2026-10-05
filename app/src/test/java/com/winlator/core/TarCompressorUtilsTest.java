@@ -9,11 +9,16 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.compress.compressors.xz.XZCompressorInputStream;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -103,6 +108,61 @@ public class TarCompressorUtilsTest {
         assertFalse(TarCompressorUtils.isSafeEntryName("C:/evil.txt"));
     }
 
+    /** Writes an octal tar header field (zero-padded, NUL-terminated). */
+    private static void writeOctal(byte[] header, int offset, int length, long value) {
+        String octal = Long.toString(value, 8);
+        String padded = String.format("%" + (length - 1) + "s", octal).replace(' ', '0');
+        byte[] digits = padded.getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(digits, 0, header, offset, length - 1);
+        header[offset + length - 1] = 0;
+    }
+
+    /**
+     * Hand-crafts a tar header so the entry name is stored verbatim: hostile
+     * archives are not built with {@code TarArchiveEntry(String)} (which strips
+     * leading slashes), their raw header names reach the extractor unchanged.
+     */
+    private static byte[] rawTarHeader(String entryName, int size) {
+        byte[] header = new byte[512];
+        byte[] name = entryName.getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(name, 0, header, 0, Math.min(name.length, 100));
+
+        writeOctal(header, 100, 8, 0644);  // mode
+        writeOctal(header, 108, 8, 0);     // uid
+        writeOctal(header, 116, 8, 0);     // gid
+        writeOctal(header, 124, 12, size);
+        writeOctal(header, 136, 12, 0);    // mtime
+        header[156] = '0';                 // regular file
+
+        byte[] magic = "ustar".getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(magic, 0, header, 257, magic.length);
+        header[263] = '0';                 // POSIX version "00"
+        header[264] = '0';
+
+        // checksum counts the checksum field itself as spaces
+        for (int i = 148; i < 156; i++) header[i] = ' ';
+        long sum = 0;
+        for (byte b : header) sum += b & 0xff;
+        byte[] chksum = String.format("%06o", sum).getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(chksum, 0, header, 148, chksum.length);
+        header[154] = 0;
+        header[155] = ' ';
+        return header;
+    }
+
+    /** Builds a tar.xz whose single entry keeps {@code entryName} verbatim. */
+    private File buildRawNameArchive(String name, String entryName, String content) throws Exception {
+        File archive = folder.newFile(name);
+        byte[] data = content.getBytes(StandardCharsets.UTF_8);
+        try (OutputStream out = new XZCompressorOutputStream(new FileOutputStream(archive))) {
+            out.write(rawTarHeader(entryName, data.length));
+            out.write(data);
+            out.write(new byte[(512 - (data.length % 512)) % 512]);
+            out.write(new byte[1024]); // end-of-archive blocks
+        }
+        return archive;
+    }
+
     @Test
     public void extractSafeRejectsParentTraversal() throws Exception {
         File archive = buildArchive("traversal.tar.xz", Entry.file("../evil.txt", "pwned"));
@@ -115,8 +175,15 @@ public class TarCompressorUtilsTest {
     @Test
     public void extractSafeRejectsAbsoluteEntryName() throws Exception {
         File outside = folder.newFolder("outside");
-        File archive = buildArchive("absolute.tar.xz", Entry.file(new File(outside, "evil.txt").getPath(), "pwned"));
+        String hostileName = new File(outside, "evil.txt").getPath();
+        File archive = buildRawNameArchive("absolute.tar.xz", hostileName, "pwned");
         File dest = folder.newFolder("dest");
+
+        // the crafted archive is well-formed and keeps the hostile name raw
+        try (InputStream inStream = new XZCompressorInputStream(new FileInputStream(archive));
+             TarArchiveInputStream tar = new TarArchiveInputStream(inStream)) {
+            assertEquals(hostileName, tar.getNextTarEntry().getName());
+        }
 
         assertFalse(TarCompressorUtils.extractSafe(TarCompressorUtils.Type.XZ, archive, dest, 0));
         assertFalse(new File(outside, "evil.txt").exists());
