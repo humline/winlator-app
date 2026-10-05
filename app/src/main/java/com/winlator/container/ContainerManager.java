@@ -164,6 +164,41 @@ public class ContainerManager {
         if (FileUtils.delete(container.getRootDir())) containers.remove(container);
     }
 
+    /**
+     * Restores a container from an extracted backup directory into a fresh
+     * container id (never overwriting existing containers).
+     */
+    public Container restoreContainer(File srcDir) {
+        int id = maxContainerId + 1;
+        File dstDir = new File(homeDir, RootFS.USER+"-"+id);
+        while (dstDir.exists()) {
+            id++;
+            dstDir = new File(homeDir, RootFS.USER+"-"+id);
+        }
+
+        if (!dstDir.mkdirs()) return null;
+
+        if (!FileUtils.copy(srcDir, dstDir, (file) -> FileUtils.chmod(file, 0771))) {
+            FileUtils.delete(dstDir);
+            return null;
+        }
+
+        Container container = new Container(id);
+        container.setRootDir(dstDir);
+        try {
+            JSONObject data = new JSONObject(FileUtils.readString(container.getConfigFile()));
+            container.loadData(data);
+        }
+        catch (JSONException e) {
+            FileUtils.delete(dstDir);
+            return null;
+        }
+
+        maxContainerId = id;
+        containers.add(container);
+        return container;
+    }
+
     public ArrayList<Shortcut> loadShortcuts(Shortcut selectedFolder) {
         ArrayList<Shortcut> shortcuts = new ArrayList<>();
 

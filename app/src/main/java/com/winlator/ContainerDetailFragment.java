@@ -39,6 +39,7 @@ import com.winlator.container.GraphicsDrivers;
 import com.winlator.contentdialog.AddEnvVarDialog;
 import com.winlator.contentdialog.AudioDriverConfigDialog;
 import com.winlator.contentdialog.ContentDialog;
+import com.winlator.contentdialog.GraphicsDiagnosticsDialog;
 import com.winlator.contentdialog.VortekConfigDialog;
 import com.winlator.core.AppUtils;
 import com.winlator.core.Callback;
@@ -46,6 +47,7 @@ import com.winlator.container.DXWrapperPicker;
 import com.winlator.core.EnvVars;
 import com.winlator.core.FileUtils;
 import com.winlator.container.GraphicsDriverPicker;
+import com.winlator.core.DefaultVersion;
 import com.winlator.core.KeyValueSet;
 import com.winlator.core.PreloaderDialog;
 import com.winlator.core.StringUtils;
@@ -139,6 +141,8 @@ public class ContainerDetailFragment extends Fragment {
         final String oldGraphicsDriverConfig = isEditMode() ? container.getGraphicsDriverConfig() : "";
         String selectedGraphicsDriver = isEditMode() ? container.getGraphicsDriver() : GraphicsDrivers.getDefaultDriver(context);
         GraphicsDriverPicker graphicsDriverPicker = new GraphicsDriverPicker(view.findViewById(R.id.LLGraphicsDriver), selectedGraphicsDriver, oldGraphicsDriverConfig);
+        if (isEditMode()) loadActiveDriverInfo(view, container);
+        view.findViewById(R.id.BTGraphicsDiagnostics).setOnClickListener((v) -> (new GraphicsDiagnosticsDialog(getActivity(), isEditMode() ? container : null)).show());
 
         String oldDXWrapperConfig = isEditMode() ? container.getDXWrapperConfig() : "";
         String selectedDXWrapper = isEditMode() ? container.getDXWrapper() : Container.DEFAULT_DXWRAPPER;
@@ -541,6 +545,24 @@ public class ContainerDetailFragment extends Fragment {
         });
 
         popupMenu.show();
+    }
+
+    /** Shows the active driver packages and the effective cache id (app-level, per-container config is untouched). */
+    private void loadActiveDriverInfo(View view, Container container) {
+        TextView tvActiveDriverInfo = view.findViewById(R.id.TVActiveDriverInfo);
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(getContext());
+        String cacheId = preferences.getString("current_graphics_driver", "-");
+
+        String[] identifiers = GraphicsDrivers.parseIdentifiers(container.getGraphicsDriver());
+        KeyValueSet[] configs = GraphicsDrivers.parseConfigs(container.getGraphicsDriver(), container.getGraphicsDriverConfig());
+
+        String vulkanVersion = identifiers[0].equals(GraphicsDrivers.TURNIP)
+            ? configs[0].get("version", DefaultVersion.TURNIP)
+            : DefaultVersion.valueOf(identifiers[0]);
+        String openGLVersion = DefaultVersion.valueOf(identifiers[1]);
+
+        tvActiveDriverInfo.setText(getString(R.string.active_driver_info, identifiers[0]+"-"+vulkanVersion, identifiers[1]+"-"+openGLVersion, cacheId));
+        tvActiveDriverInfo.setVisibility(View.VISIBLE);
     }
 
     private void loadWineVersionSpinner(final View view, Spinner sWineVersion, final ArrayList<WineInfo> wineInfos) {

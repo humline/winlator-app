@@ -33,25 +33,19 @@ public abstract class TarCompressorUtils {
         File onExtractFile(File destination, long size);
     }
 
-    private static void addFile(ArchiveOutputStream tar, File file, String entryName) {
-        try {
-            tar.putArchiveEntry(tar.createArchiveEntry(file, entryName));
-            try (BufferedInputStream inStream = new BufferedInputStream(new FileInputStream(file), StreamUtils.BUFFER_SIZE)) {
-                StreamUtils.copy(inStream, tar);
-            }
-            tar.closeArchiveEntry();
+    private static void addFile(ArchiveOutputStream tar, File file, String entryName) throws IOException {
+        tar.putArchiveEntry(tar.createArchiveEntry(file, entryName));
+        try (BufferedInputStream inStream = new BufferedInputStream(new FileInputStream(file), StreamUtils.BUFFER_SIZE)) {
+            if (!StreamUtils.copy(inStream, tar)) throw new IOException("unable to read " + entryName);
         }
-        catch (Exception e) {}
+        tar.closeArchiveEntry();
     }
 
-    private static void addLinkFile(ArchiveOutputStream tar, File file, String entryName) {
-        try {
-            TarArchiveEntry entry = new TarArchiveEntry(entryName, TarConstants.LF_SYMLINK);
-            entry.setLinkName(FileUtils.readSymlink(file));
-            tar.putArchiveEntry(entry);
-            tar.closeArchiveEntry();
-        }
-        catch (Exception e) {}
+    private static void addLinkFile(ArchiveOutputStream tar, File file, String entryName) throws IOException {
+        TarArchiveEntry entry = new TarArchiveEntry(entryName, TarConstants.LF_SYMLINK);
+        entry.setLinkName(FileUtils.readSymlink(file));
+        tar.putArchiveEntry(entry);
+        tar.closeArchiveEntry();
     }
 
     private static void addDirectory(ArchiveOutputStream tar, File folder, String basePath) throws IOException {
@@ -71,15 +65,16 @@ public abstract class TarCompressorUtils {
         }
     }
 
-    public static void compress(Type type, File file, File destination) {
+    public static void compress(Type type, File file, File destination) throws IOException {
         compress(type, file, destination, 3);
     }
 
-    public static void compress(Type type, File file, File destination, int level) {
+    public static void compress(Type type, File file, File destination, int level) throws IOException {
         compress(type, new File[]{file}, destination, level);
     }
 
-    public static void compress(Type type, File[] files, File destination, int level) {
+    /** Compresses {@code files} into {@code destination}; I/O failures are propagated to the caller. */
+    public static void compress(Type type, File[] files, File destination, int level) throws IOException {
         try (OutputStream outStream = getCompressorOutputStream(type, destination, level);
              TarArchiveOutputStream tar = new TarArchiveOutputStream(outStream)) {
             tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU);
@@ -101,7 +96,6 @@ public abstract class TarCompressorUtils {
             }
             tar.finish();
         }
-        catch (IOException e) {}
     }
 
     public static boolean extract(Type type, Context context, String assetFile, File destination) {
@@ -173,6 +167,78 @@ public abstract class TarCompressorUtils {
                     }
                 }
 
+                FileUtils.chmod(file, 0771);
+            }
+            return true;
+        }
+        catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Checks that a tar entry name cannot escape the extraction directory:
+     * absolute paths (unix or windows style) and {@code ..} segments are
+     * rejected. Pure logic, validated by {@code TarCompressorUtilsTest}.
+     */
+    public static boolean isSafeEntryName(String name) {
+        if (name == null || name.isEmpty()) return false;
+
+        String normalized = name.replace('\\', '/');
+        if (normalized.startsWith("/")) return false;
+        if (normalized.length() >= 2 && normalized.charAt(1) == ':') return false; // windows drive
+
+        for (String segment : normalized.split("/")) {
+            if (segment.equals("..")) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Extracts an <em>untrusted</em> archive with strict containment. Absolute
+     * entry names, {@code ..} segments and symlink / hard-link / device entries
+     * are rejected (they can redirect later writes outside the destination),
+     * every written file must stay inside {@code destination} (canonical paths)
+     * and the total extracted size is capped at {@code maxTotalBytes}
+     * ({@code <= 0} = unlimited). Aborts and returns {@code false} on the first
+     * violation; partial output is left for the caller to clean up.
+     */
+    public static boolean extractSafe(Type type, File source, File destination, long maxTotalBytes) {
+        if (source == null || !source.isFile()) return false;
+        try (InputStream inStream = getCompressorInputStream(type, new BufferedInputStream(new FileInputStream(source), StreamUtils.BUFFER_SIZE));
+             ArchiveInputStream tar = new TarArchiveInputStream(inStream)) {
+            String destPath = destination.getCanonicalPath();
+            long totalSize = 0;
+            TarArchiveEntry entry;
+            while ((entry = (TarArchiveEntry)tar.getNextEntry()) != null) {
+                if (!tar.canReadEntryData(entry)) continue;
+                if (!isSafeEntryName(entry.getName())) return false;
+
+                File file = new File(destination, entry.getName());
+                String filePath = file.getCanonicalPath();
+
+                if (entry.isDirectory()) {
+                    if (filePath.equals(destPath)) continue;
+                    if (!filePath.startsWith(destPath + File.separator)) return false;
+                    if (!file.isDirectory() && !file.mkdirs()) return false;
+                    continue;
+                }
+
+                // special entries can redirect later writes outside the destination
+                if (entry.isSymbolicLink() || entry.isLink() || entry.isFIFO() ||
+                    entry.isCharacterDevice() || entry.isBlockDevice()) return false;
+
+                if (!filePath.startsWith(destPath + File.separator)) return false;
+
+                totalSize += entry.getSize();
+                if (maxTotalBytes > 0 && totalSize > maxTotalBytes) return false;
+
+                File parent = file.getParentFile();
+                if (parent != null && !parent.isDirectory() && !parent.mkdirs()) return false;
+
+                try (BufferedOutputStream outStream = new BufferedOutputStream(new FileOutputStream(file), StreamUtils.BUFFER_SIZE)) {
+                    if (!StreamUtils.copy(tar, outStream)) return false;
+                }
                 FileUtils.chmod(file, 0771);
             }
             return true;

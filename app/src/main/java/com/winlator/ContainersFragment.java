@@ -3,8 +3,10 @@ package com.winlator;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -30,17 +32,24 @@ import com.winlator.container.Container;
 import com.winlator.container.ContainerManager;
 import com.winlator.contentdialog.ContentDialog;
 import com.winlator.contentdialog.StorageInfoDialog;
+import com.winlator.core.AppUtils;
+import com.winlator.core.BackupManager;
+import com.winlator.core.Callback;
 import com.winlator.core.PreloaderDialog;
 import com.winlator.xenvironment.RootFS;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
 
 public class ContainersFragment extends Fragment {
     private RecyclerView recyclerView;
     private TextView emptyTextView;
     private ContainerManager manager;
     private PreloaderDialog preloaderDialog;
+    private Callback<Uri> selectFileCallback;
 
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
@@ -94,7 +103,44 @@ public class ContainersFragment extends Fragment {
                 .commit();
             return true;
         }
+        else if (menuItem.getItemId() == R.id.menu_item_import) {
+            final Context context = getContext();
+            if (!RootFS.find(context).isValid()) return false;
+            selectFileCallback = (uri) -> {
+                preloaderDialog.show(R.string.importing_backup);
+                Executors.newSingleThreadExecutor().execute(() -> {
+                    BackupManager.RestoreResult result = BackupManager.restore(context, uri);
+                    preloaderDialog.closeOnUiThread();
+                    if (result.isSuccess()) {
+                        AppUtils.showToast(context, result.conflicts.isEmpty() ? R.string.backup_restored : R.string.backup_restored_with_conflicts);
+                    }
+                    else AppUtils.showToast(context, R.string.unable_to_import_backup);
+
+                    Activity activity = getActivity();
+                    if (activity != null) activity.runOnUiThread(this::loadContainersList);
+                });
+            };
+
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
+            getActivity().startActivityFromFragment(this, intent, MainActivity.OPEN_FILE_REQUEST_CODE);
+            return true;
+        }
         else return super.onOptionsItemSelected(menuItem);
+    }
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        if (requestCode == MainActivity.OPEN_FILE_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
+            try {
+                if (selectFileCallback != null && data != null) selectFileCallback.call(data.getData());
+            }
+            catch (Exception e) {
+                AppUtils.showToast(getContext(), R.string.unable_to_import_backup);
+            }
+            selectFileCallback = null;
+        }
     }
 
     private class ContainersAdapter extends RecyclerView.Adapter<ContainersAdapter.ViewHolder> {
@@ -159,6 +205,22 @@ public class ContainersFragment extends Fragment {
                                 preloaderDialog.close();
                                 loadContainersList();
                             });
+                        });
+                        break;
+                    case R.id.menu_item_export:
+                        preloaderDialog.show(R.string.exporting_backup);
+                        Executors.newSingleThreadExecutor().execute(() -> {
+                            File file = null;
+                            try {
+                                file = BackupManager.exportContainer(activity, container);
+                            }
+                            catch (IOException e) {}
+                            preloaderDialog.closeOnUiThread();
+                            if (file != null) {
+                                String path = file.getPath().substring(file.getPath().indexOf(Environment.DIRECTORY_DOWNLOADS));
+                                AppUtils.showToast(activity, activity.getString(R.string.backup_exported_to)+" "+path);
+                            }
+                            else AppUtils.showToast(activity, R.string.unable_to_export_backup);
                         });
                         break;
                     case R.id.menu_item_remove:

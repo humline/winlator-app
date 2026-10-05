@@ -13,14 +13,18 @@ import com.winlator.core.AppUtils;
 import com.winlator.core.DownloadProgressDialog;
 import com.winlator.core.FileUtils;
 import com.winlator.core.PreloaderDialog;
+import com.winlator.core.StagedInstaller;
+import com.winlator.core.StorageChecker;
 import com.winlator.core.TarCompressorUtils;
 import com.winlator.core.WineInfo;
+import com.winlator.contentdialog.ContentDialog;
 
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
@@ -45,8 +49,15 @@ public abstract class RootFSInstaller {
     }
 
     public static void install(final MainActivity activity) {
+        if (!AppUtils.isUiThread()) {
+            // UI setup (window flags, progress dialog) must run on the main
+            // thread; the extraction itself stays on the worker executor below
+            activity.runOnUiThread(() -> install(activity));
+            return;
+        }
+
         AppUtils.keepScreenOn(activity);
-        RootFS rootFS = RootFS.find(activity);
+        final RootFS rootFS = RootFS.find(activity);
         final File rootDir = rootFS.getRootDir();
 
         SettingsFragment.resetPreferenceVersions(activity);
@@ -54,11 +65,24 @@ public abstract class RootFSInstaller {
         final DownloadProgressDialog dialog = new DownloadProgressDialog(activity);
         dialog.show(R.string.installing_system_files);
         Executors.newSingleThreadExecutor().execute(() -> {
-            clearRootDir(rootDir);
-            final long contentLength = TarCompressorUtils.getContentLength(TarCompressorUtils.Type.ZSTD, activity, FILENAME, rootDir);
+            // recover from any interrupted install/update before touching anything
+            rootFS.recoverFromInterruptedLaunch();
+            StagedInstaller.deleteRecursive(rootFS.getStagingDir());
+
+            final long contentLength = TarCompressorUtils.getContentLength(TarCompressorUtils.Type.ZSTD, activity, FILENAME, rootFS.getStagingDir());
+
+            // staged install keeps the live rootfs plus a full staging copy
+            StorageChecker.Result storageResult = StorageChecker.checkRootfsInstall(rootDir, contentLength);
+            if (!storageResult.sufficient) {
+                dialog.closeOnUiThread();
+                showNotEnoughStorageDialog(activity, storageResult);
+                return;
+            }
+
+            final File stagingDir = rootFS.getStagingDir();
             AtomicLong totalSizeRef = new AtomicLong();
 
-            boolean success = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, activity, FILENAME, rootDir, (file, size) -> {
+            boolean success = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, activity, FILENAME, stagingDir, (file, size) -> {
                 if (size > 0) {
                     long totalSize = totalSizeRef.addAndGet(size);
                     final int progress = (int)(((float)totalSize / contentLength) * 100);
@@ -66,6 +90,11 @@ public abstract class RootFSInstaller {
                 }
                 return file;
             });
+
+            // validate the staged rootfs (required paths + expected size) and
+            // switch it into place (with rollback)
+            success = success && StagedInstaller.validate(stagingDir, contentLength).valid
+                && StagedInstaller.commit(rootDir, stagingDir, rootFS.getBackupDir());
 
             if (success) {
                 rootFS.createRFSVersionFile(LATEST_VERSION);
@@ -78,37 +107,26 @@ public abstract class RootFSInstaller {
     }
 
     public static void installIfNeeded(final MainActivity activity) {
-        RootFS rootFS = RootFS.find(activity);
-        if (!rootFS.isValid() || rootFS.getVersion() < LATEST_VERSION) install(activity);
+        Executors.newSingleThreadExecutor().execute(() -> {
+            RootFS rootFS = RootFS.find(activity);
+            if (rootFS.recoverFromInterruptedLaunch()) {
+                // a previous launch of the updated system failed: stay on the
+                // restored system and let the user trigger the update manually
+                AppUtils.showToast(activity, R.string.restored_previous_system_files);
+                return;
+            }
+            if (!rootFS.isValid() || rootFS.getVersion() < LATEST_VERSION) install(activity);
+        });
     }
 
-    private static void clearOptDir(File optDir) {
-        File[] files = optDir.listFiles();
-        if (files != null) {
-            for (File file : files) {
-                if (file.getName().equals("installed-wine")) continue;
-                FileUtils.delete(file);
-            }
-        }
-    }
-
-    private static void clearRootDir(File rootDir) {
-        if (rootDir.isDirectory()) {
-            File[] files = rootDir.listFiles();
-            if (files != null) {
-                for (File file : files) {
-                    if (file.isDirectory()) {
-                        String name = file.getName();
-                        if (name.equals("home") || name.equals("opt")) {
-                            if (name.equals("opt")) clearOptDir(file);
-                            continue;
-                        }
-                    }
-                    FileUtils.delete(file);
-                }
-            }
-        }
-        else rootDir.mkdirs();
+    private static void showNotEnoughStorageDialog(final MainActivity activity, final StorageChecker.Result result) {
+        activity.runOnUiThread(() -> {
+            ContentDialog dialog = new ContentDialog(activity);
+            dialog.setTitle(R.string.not_enough_storage);
+            dialog.setMessage(activity.getString(R.string.free_storage_space_hint, Math.max(1, result.missingBytes() / (1024 * 1024))));
+            dialog.findViewById(R.id.BTCancel).setVisibility(android.view.View.GONE);
+            dialog.show();
+        });
     }
 
     public static void generateCompactContainerPattern(final AppCompatActivity activity) {
@@ -177,11 +195,12 @@ public abstract class RootFSInstaller {
                 File outputFile = new File(activity.getCacheDir(), "container_pattern.tzst");
                 FileUtils.delete(outputFile);
                 TarCompressorUtils.compress(TarCompressorUtils.Type.ZSTD, new File(containerPatternDir, ".wine"), outputFile, 22);
-
+            }
+            catch (JSONException | IOException e) {}
+            finally {
                 FileUtils.delete(containerPatternDir);
                 preloaderDialog.closeOnUiThread();
             }
-            catch (JSONException e) {}
         });
     }
 }

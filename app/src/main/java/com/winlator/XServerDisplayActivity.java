@@ -8,16 +8,22 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
+import android.hardware.input.InputManager;
+import android.media.MediaScannerConnection;
 import android.os.Bundle;
+import android.os.Environment;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.MotionEvent;
+import android.view.InputDevice;
+import android.view.PointerIcon;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.Spinner;
+import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -43,6 +49,11 @@ import com.winlator.contentdialog.ScreenEffectDialog;
 import com.winlator.contentdialog.TurnipConfigDialog;
 import com.winlator.contentdialog.VKD3DConfigDialog;
 import com.winlator.contentdialog.VirGLConfigDialog;
+import com.winlator.core.BackupManager;
+import com.winlator.core.FrameTimeLogger;
+import com.winlator.core.StagedInstaller;
+import com.winlator.core.StagedLibSwap;
+import com.winlator.core.StorageChecker;
 import com.winlator.contentdialog.WineD3DConfigDialog;
 import com.winlator.core.AppUtils;
 import com.winlator.core.DefaultVersion;
@@ -98,8 +109,10 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import java.util.concurrent.Executors;
 
 public class XServerDisplayActivity extends AppCompatActivity implements NavigationView.OnNavigationItemSelectedListener {
@@ -131,6 +144,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     private final WinHandler winHandler = new WinHandler(this);
     private float globalCursorSpeed = 1.0f;
     private boolean capturePointerOnExternalMouse = true;
+    private boolean hideSystemCursorOnExternalMouse = true;
+    private InputManager inputManager;
+    private FrameTimeLogger frameTimeLogger;
     private MagnifierView magnifierView;
     private DebugDialog debugDialog;
     public int frameRatingWindowId = -1;
@@ -165,6 +181,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
         rootFS = RootFS.find(this);
 
+        inputManager = (InputManager)getSystemService(INPUT_SERVICE);
+        if (inputManager != null) inputManager.registerInputDeviceListener(inputDeviceListener, null);
+
         if (!isGenerateWineprefix()) {
             ContainerManager containerManager = new ContainerManager(this);
             container = containerManager.getContainerById(getIntent().getIntExtra("container_id", 0));
@@ -172,16 +191,33 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
             boolean wineprefixNeedsUpdate = container.getExtra("wineprefixNeedsUpdate").equals("t");
             if (wineprefixNeedsUpdate) {
-                preloaderDialog.show(R.string.updating_system_files);
-                WineUtils.updateWineprefix(this, (status) -> {
-                    if (status == 0) {
-                        container.putExtra("wineprefixNeedsUpdate", null);
-                        container.putExtra("wincomponents", null);
-                        container.saveData();
-                        AppUtils.restartActivity(this);
-                    }
-                    else finish();
+                StorageChecker.Result storageResult = StorageChecker.checkWineprefixUpdate(rootFS.getRootDir(), StorageChecker.dirSize(new File(rootFS.getRootDir(), RootFS.WINEPREFIX)));
+                if (!storageResult.sufficient) {
+                    ContentDialog.alert(this, R.string.not_enough_storage, () -> finish());
+                    return;
+                }
+
+                ContentDialog migrationDialog = new ContentDialog(this);
+                migrationDialog.setTitle(R.string.system_files_migration);
+                migrationDialog.setMessage(R.string.migration_warning, R.drawable.content_dialog_type_confirm);
+                ((TextView)migrationDialog.findViewById(R.id.BTConfirm)).setText(R.string.backup_now);
+                ((TextView)migrationDialog.findViewById(R.id.BTCancel)).setText(R.string.continue_without_backup);
+
+                // confirm = back up first, cancel = continue without backup,
+                // dismissing the dialog (back button) aborts the migration
+                final boolean[] handled = {false};
+                migrationDialog.setOnConfirmCallback(() -> {
+                    handled[0] = true;
+                    backupContainerThenUpdate(preloaderDialog);
                 });
+                migrationDialog.setOnCancelCallback(() -> {
+                    handled[0] = true;
+                    continueWineprefixUpdate(preloaderDialog);
+                });
+                migrationDialog.setOnDismissListener((dialog) -> {
+                    if (!handled[0]) finish();
+                });
+                migrationDialog.show();
                 return;
             }
 
@@ -248,6 +284,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                     xServerView.getRenderer().setCursorVisible(true);
                     preloaderDialog.closeOnUiThread();
                     flags[0] = true;
+                    Executors.newSingleThreadExecutor().execute(rootFS::confirmLaunch);
                 }
 
                 if (flags[1] && window.attributes.isViewable() && window.isDesktopWindow()) {
@@ -268,12 +305,66 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         setupUI();
 
         Executors.newSingleThreadExecutor().execute(() -> {
+            // recover from a launch that crashed before it could confirm; this
+            // must run before the current launch marker is created, otherwise
+            // the current launch would be mistaken for a prior crash and roll
+            // back a pending rootfs update during its own first launch
+            if (rootFS.recoverFromInterruptedLaunch()) {
+                AppUtils.showToast(this, R.string.restored_previous_system_files);
+            }
+            rootFS.beginLaunch();
+
             if (!isGenerateWineprefix()) {
                 setupWineSystemFiles();
                 extractGraphicsDriverFiles();
                 changeWineAudioDriver();
             }
             setupXEnvironment();
+        });
+    }
+
+    /** Runs the wineprefix migration (with crash recovery) after the user confirmed it. */
+    private void continueWineprefixUpdate(PreloaderDialog preloaderDialog) {
+        preloaderDialog.show(R.string.updating_system_files);
+        Executors.newSingleThreadExecutor().execute(() -> {
+            if (rootFS.recoverFromInterruptedLaunch()) {
+                AppUtils.showToast(this, R.string.restored_previous_system_files);
+            }
+            runOnUiThread(() -> WineUtils.updateWineprefix(this, (status) -> {
+                if (status == 0) {
+                    container.putExtra("wineprefixNeedsUpdate", null);
+                    container.putExtra("wincomponents", null);
+                    container.saveData();
+                    AppUtils.restartActivity(this);
+                }
+                else finish();
+            }));
+        });
+    }
+
+    /** Exports a container backup first and then runs the wineprefix migration. */
+    private void backupContainerThenUpdate(PreloaderDialog preloaderDialog) {
+        preloaderDialog.show(R.string.exporting_backup);
+        Executors.newSingleThreadExecutor().execute(() -> {
+            File exported = null;
+            try {
+                exported = BackupManager.exportContainer(this, container);
+            }
+            catch (IOException e) {}
+            final File backupFile = exported;
+
+            runOnUiThread(() -> {
+                if (backupFile != null) {
+                    String path = backupFile.getPath().substring(backupFile.getPath().indexOf(Environment.DIRECTORY_DOWNLOADS));
+                    AppUtils.showToast(this, getString(R.string.backup_exported_to)+" "+path);
+                    continueWineprefixUpdate(preloaderDialog);
+                }
+                else {
+                    preloaderDialog.close();
+                    AppUtils.showToast(this, R.string.unable_to_export_backup);
+                    finish();
+                }
+            });
         });
     }
 
@@ -337,10 +428,60 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
     @Override
     protected void onDestroy() {
+        if (inputManager != null) inputManager.unregisterInputDeviceListener(inputDeviceListener);
+        getWindow().getDecorView().setPointerIcon(null); // restore the default cursor
+        if (frameTimeLogger != null) {
+            frameTimeLogger.stop();
+            MediaScannerConnection.scanFile(this, new String[]{new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Winlator/benchmarks").getAbsolutePath()}, null, null);
+        }
         winHandler.stop();
         if (environment != null) environment.stopEnvironmentComponents();
         ForegroundService.stopSession(this);
         super.onDestroy();
+    }
+
+    private final InputManager.InputDeviceListener inputDeviceListener = new InputManager.InputDeviceListener() {
+        @Override
+        public void onInputDeviceAdded(int id) {
+            updateSystemCursorVisibility();
+        }
+
+        @Override
+        public void onInputDeviceRemoved(int id) {
+            updateSystemCursorVisibility();
+        }
+
+        @Override
+        public void onInputDeviceChanged(int id) {
+            updateSystemCursorVisibility();
+        }
+    };
+
+    private static boolean hasDeviceWithSource(int source) {
+        for (int id : InputDevice.getDeviceIds()) {
+            InputDevice device = InputDevice.getDevice(id);
+            if (device != null && !device.isVirtual() && (device.getSources() & source) == source) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Hides the Android system cursor while an external mouse and keyboard are
+     * used with pointer capture (the game draws its own cursor); restores the
+     * default cursor otherwise.
+     */
+    private void updateSystemCursorVisibility() {
+        boolean hide = hideSystemCursorOnExternalMouse
+            && capturePointerOnExternalMouse
+            && hasDeviceWithSource(InputDevice.SOURCE_MOUSE)
+            && hasDeviceWithSource(InputDevice.SOURCE_KEYBOARD);
+
+        // TYPE_NULL hides the system cursor (the game draws its own);
+        // a null icon restores the default Android cursor
+        if (hide) {
+            getWindow().getDecorView().setPointerIcon(PointerIcon.getSystemIcon(this, PointerIcon.TYPE_NULL));
+        }
+        else getWindow().getDecorView().setPointerIcon(null);
     }
 
     @Override
@@ -584,11 +725,18 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         renderer.setCursorScale(preferences.getFloat("cursor_scale", 1.0f));
         renderer.setForceWindowsFullscreen(shortcut != null && shortcut.getExtra("forceFullscreen", "0").equals("1"));
 
+        if (preferences.getBoolean("frame_time_logger", false) || MainActivity.DEBUG_MODE) {
+            File benchmarksDir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Winlator/benchmarks");
+            frameTimeLogger = new FrameTimeLogger(benchmarksDir);
+            if (frameTimeLogger.start()) renderer.setFrameTimeLogger(frameTimeLogger);
+        }
+
         xServer.setRenderer(renderer);
         rootView.addView(xServerView);
 
         globalCursorSpeed = preferences.getFloat("cursor_speed", 1.0f);
         capturePointerOnExternalMouse = preferences.getBoolean("capture_pointer_on_external_mouse", true);
+        hideSystemCursorOnExternalMouse = preferences.getBoolean("hide_system_cursor_on_external_mouse", true);
         touchpadView = new TouchpadView(this, xServer, capturePointerOnExternalMouse);
         touchpadView.setSensitivity(globalCursorSpeed);
         touchpadView.setMoveCursorToTouchpoint(preferences.getBoolean("move_cursor_to_touchpoint", false));
@@ -596,6 +744,8 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             if (!drawerLayout.isDrawerOpen(GravityCompat.START)) drawerLayout.openDrawer(GravityCompat.START);
         });
         rootView.addView(touchpadView);
+
+        updateSystemCursorVisibility();
 
         inputControlsView = new InputControlsView(this);
         inputControlsView.setOverlayOpacity(preferences.getFloat("overlay_opacity", InputControlsView.DEFAULT_OVERLAY_OPACITY));
@@ -728,30 +878,14 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         String currentGraphicsDriver = preferences.getString("current_graphics_driver", "");
         boolean changed = !cacheId.equals(currentGraphicsDriver);
         File rootDir = rootFS.getRootDir();
-        File libDir = rootFS.getLibDir();
 
-        if (changed) {
-            FileUtils.delete(new File(libDir, "libvulkan_freedreno.so"));
-            FileUtils.delete(new File(libDir, "libvulkan_vortek.so"));
-            FileUtils.delete(new File(libDir, "libGL.so.1.7.0"));
-
-            File vulkanICDDir = new File(rootDir, "/usr/share/vulkan/icd.d");
-            FileUtils.delete(vulkanICDDir);
-            vulkanICDDir.mkdirs();
-
-            preferences.edit().putString("current_graphics_driver", cacheId).apply();
-        }
+        // Driver package updates are staged, checksum-verified and validated
+        // before replacing the live libs (rolling back on failure). Per-container
+        // graphicsDriver/graphicsDriverConfig extras are never touched here.
+        if (changed || MainActivity.DEBUG_MODE) refreshGraphicsDriverFiles(changed, cacheId);
 
         if (graphicsDriver[0].equals(GraphicsDrivers.TURNIP)) {
             TurnipConfigDialog.setEnvVars(this, graphicsDriverConfig[0], envVars);
-
-            if (changed) {
-                String version = graphicsDriverConfig[0].get("version", DefaultVersion.TURNIP);
-                GeneralComponents.extractFile(GeneralComponents.Type.TURNIP, this, version, DefaultVersion.TURNIP);
-            }
-        }
-        else if (graphicsDriver[0].equals(GraphicsDrivers.VORTEK) && (changed || MainActivity.DEBUG_MODE)) {
-            TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "graphics_driver/vortek-" + DefaultVersion.VORTEK + ".tzst", rootDir);
         }
 
         switch (graphicsDriver[1]) {
@@ -759,22 +893,102 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                 envVars.put("GALLIUM_DRIVER", "zink");
                 envVars.put("ZINK_CONTEXT_THREADED", "1");
                 if (graphicsDriver[0].equals(GraphicsDrivers.VORTEK)) envVars.put("MESA_GL_VERSION_OVERRIDE", "3.3");
-
-                if (changed) TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "graphics_driver/zink-"+DefaultVersion.ZINK+".tzst", rootDir);
                 break;
             case GraphicsDrivers.VIRGL:
                 envVars.put("GALLIUM_DRIVER", "virpipe");
                 envVars.put("VIRGL_NO_READBACK", "true");
                 envVars.put("VIRGL_SERVER_PATH", rootDir+UnixSocketConfig.VIRGL_SERVER_PATH);
                 VirGLConfigDialog.setEnvVars(graphicsDriverConfig[1], envVars);
-
-                if (changed) TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "graphics_driver/virgl-"+DefaultVersion.VIRGL+".tzst", rootDir);
                 break;
             case GraphicsDrivers.GLADIO:
                 envVars.put("GLADIO_NO_ERROR", "1");
-
-                if (changed || MainActivity.DEBUG_MODE) TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "graphics_driver/gladio-"+DefaultVersion.GLADIO+".tzst", rootDir);
                 break;
+        }
+    }
+
+    /**
+     * Extracts the selected driver packages into a staging directory, verifies
+     * their SHA-256 checksums and swaps them into place, keeping the previous
+     * libvulkan_freedreno.so / libvulkan_vortek.so / libGL.so.1.7.0 as backups
+     * until validation passes. Rolls back on any failure.
+     */
+    private void refreshGraphicsDriverFiles(boolean changed, String cacheId) {
+        File rootDir = rootFS.getRootDir();
+        File stagingDir = new File(rootDir.getParentFile(), "driver_staging");
+        StagedInstaller.deleteRecursive(stagingDir);
+        stagingDir.mkdirs();
+
+        boolean success = true;
+
+        if (graphicsDriver[0].equals(GraphicsDrivers.TURNIP)) {
+            if (changed) {
+                String version = graphicsDriverConfig[0].get("version", DefaultVersion.TURNIP);
+                success = GeneralComponents.extractFileTo(GeneralComponents.Type.TURNIP, this, version, DefaultVersion.TURNIP, stagingDir, null);
+            }
+        }
+        else if (graphicsDriver[0].equals(GraphicsDrivers.VORTEK)) {
+            success = extractVerifiedDriverAsset("graphics_driver/vortek-"+DefaultVersion.VORTEK+".tzst", stagingDir);
+        }
+
+        if (success && changed) {
+            switch (graphicsDriver[1]) {
+                case GraphicsDrivers.ZINK:
+                    success = extractVerifiedDriverAsset("graphics_driver/zink-"+DefaultVersion.ZINK+".tzst", stagingDir);
+                    break;
+                case GraphicsDrivers.VIRGL:
+                    success = extractVerifiedDriverAsset("graphics_driver/virgl-"+DefaultVersion.VIRGL+".tzst", stagingDir);
+                    break;
+                case GraphicsDrivers.GLADIO:
+                    success = extractVerifiedDriverAsset("graphics_driver/gladio-"+DefaultVersion.GLADIO+".tzst", stagingDir);
+                    break;
+            }
+        }
+        else if (success && graphicsDriver[1].equals(GraphicsDrivers.GLADIO)) {
+            success = extractVerifiedDriverAsset("graphics_driver/gladio-"+DefaultVersion.GLADIO+".tzst", stagingDir);
+        }
+
+        if (success) {
+            List<String> swappedPaths = new ArrayList<>();
+            try {
+                StagedLibSwap.swap(stagingDir, rootDir, swappedPaths);
+                List<String> errors = StagedLibSwap.validate(rootDir, swappedPaths);
+                if (errors.isEmpty()) {
+                    StagedLibSwap.commit(rootDir, swappedPaths);
+                    cleanupStaleDriverFiles(swappedPaths);
+                    if (changed) preferences.edit().putString("current_graphics_driver", cacheId).apply();
+                }
+                else {
+                    StagedLibSwap.rollback(rootDir, swappedPaths);
+                    success = false;
+                }
+            }
+            catch (IOException e) {
+                StagedLibSwap.rollback(rootDir, swappedPaths);
+                success = false;
+            }
+        }
+
+        if (!success) AppUtils.showToast(this, R.string.unable_to_install_graphics_driver);
+        StagedInstaller.deleteRecursive(stagingDir);
+    }
+
+    private boolean extractVerifiedDriverAsset(String assetPath, File destination) {
+        return GeneralComponents.verifyAssetPackage(this, assetPath)
+            && TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, assetPath, destination);
+    }
+
+    private void cleanupStaleDriverFiles(List<String> swappedPaths) {
+        String[] driverLibs = {"libvulkan_freedreno.so", "libvulkan_vortek.so", "libGL.so.1.7.0"};
+        for (String name : driverLibs) {
+            if (!swappedPaths.contains("usr/lib/"+name)) FileUtils.delete(new File(rootFS.getLibDir(), name));
+        }
+
+        File vulkanICDDir = new File(rootFS.getRootDir(), "/usr/share/vulkan/icd.d");
+        File[] icdFiles = vulkanICDDir.listFiles();
+        if (icdFiles != null) {
+            for (File file : icdFiles) {
+                if (!swappedPaths.contains("usr/share/vulkan/icd.d/"+file.getName())) FileUtils.delete(file);
+            }
         }
     }
 

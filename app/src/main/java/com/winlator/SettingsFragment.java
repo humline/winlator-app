@@ -8,6 +8,7 @@ import android.media.midi.MidiDeviceInfo;
 import android.media.midi.MidiManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.LayoutInflater;
@@ -42,9 +43,11 @@ import com.winlator.container.Container;
 import com.winlator.container.ContainerManager;
 import com.winlator.contentdialog.ContentDialog;
 import com.winlator.contentdialog.GamepadPlayerConfigDialog;
+import com.winlator.contentdialog.GraphicsDiagnosticsDialog;
 import com.winlator.contentdialog.SoundFontTestDialog;
 import com.winlator.core.AppUtils;
 import com.winlator.core.ArrayUtils;
+import com.winlator.core.BackupManager;
 import com.winlator.core.Callback;
 import com.winlator.core.DefaultVersion;
 import com.winlator.core.FileUtils;
@@ -66,6 +69,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.Executors;
@@ -76,6 +80,7 @@ public class SettingsFragment extends Fragment {
     public static final byte APP_THEME_LIGHT = 0;
     public static final byte APP_THEME_DARK = 1;
     private Callback<Uri> selectWineFileCallback;
+    private Callback<Uri> selectBackupFileCallback;
     private PreloaderDialog preloaderDialog;
     private SharedPreferences preferences;
     private boolean midiDeviceCallbackRegistered = false;
@@ -98,11 +103,13 @@ public class SettingsFragment extends Fragment {
         if (requestCode == MainActivity.OPEN_FILE_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
             try {
                 if (selectWineFileCallback != null && data != null) selectWineFileCallback.call(data.getData());
+                else if (selectBackupFileCallback != null && data != null) selectBackupFileCallback.call(data.getData());
             }
             catch (Exception e) {
-                AppUtils.showToast(getContext(), R.string.unable_to_import_profile);
+                AppUtils.showToast(getContext(), selectWineFileCallback != null ? R.string.unable_to_import_profile : R.string.unable_to_import_backup);
             }
             selectWineFileCallback = null;
+            selectBackupFileCallback = null;
         }
     }
 
@@ -138,6 +145,12 @@ public class SettingsFragment extends Fragment {
 
         final CheckBox cbCapturePointerOnExternalMouse = view.findViewById(R.id.CBCapturePointerOnExternalMouse);
         cbCapturePointerOnExternalMouse.setChecked(preferences.getBoolean("capture_pointer_on_external_mouse", true));
+
+        final CheckBox cbHideSystemCursorOnExternalMouse = view.findViewById(R.id.CBHideSystemCursorOnExternalMouse);
+        cbHideSystemCursorOnExternalMouse.setChecked(preferences.getBoolean("hide_system_cursor_on_external_mouse", true));
+
+        final CheckBox cbFrameTimeLogger = view.findViewById(R.id.CBFrameTimeLogger);
+        cbFrameTimeLogger.setChecked(preferences.getBoolean("frame_time_logger", false));
 
         final CheckBox cbOpenAndroidBrowserFromWine = view.findViewById(R.id.CBOpenAndroidBrowserFromWine);
         cbOpenAndroidBrowserFromWine.setChecked(preferences.getBoolean("open_android_browser_from_wine", true));
@@ -216,6 +229,46 @@ public class SettingsFragment extends Fragment {
             ContentDialog.confirm(context, R.string.do_you_want_to_reinstall_system_files, () -> RootFSInstaller.install((MainActivity)getActivity()));
         });
 
+        view.findViewById(R.id.BTExportBackup).setOnClickListener((v) -> {
+            preloaderDialog.show(R.string.exporting_backup);
+            Executors.newSingleThreadExecutor().execute(() -> {
+                File file = null;
+                try {
+                    file = BackupManager.exportGlobal(context);
+                }
+                catch (IOException e) {}
+                preloaderDialog.closeOnUiThread();
+                if (file != null) {
+                    String path = file.getPath().substring(file.getPath().indexOf(Environment.DIRECTORY_DOWNLOADS));
+                    AppUtils.showToast(context, context.getString(R.string.backup_exported_to)+" "+path);
+                }
+                else AppUtils.showToast(context, R.string.unable_to_export_backup);
+            });
+        });
+
+        view.findViewById(R.id.BTGraphicsDiagnostics).setOnClickListener((v) -> {
+            (new GraphicsDiagnosticsDialog(getActivity(), null)).show();
+        });
+
+        view.findViewById(R.id.BTImportBackup).setOnClickListener((v) -> {
+            selectBackupFileCallback = (uri) -> {
+                preloaderDialog.show(R.string.importing_backup);
+                Executors.newSingleThreadExecutor().execute(() -> {
+                    BackupManager.RestoreResult result = BackupManager.restore(context, uri);
+                    preloaderDialog.closeOnUiThread();
+                    if (result.isSuccess()) {
+                        AppUtils.showToast(context, result.conflicts.isEmpty() ? R.string.backup_restored : R.string.backup_restored_with_conflicts);
+                    }
+                    else AppUtils.showToast(context, R.string.unable_to_import_backup);
+                });
+            };
+
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
+            getActivity().startActivityFromFragment(this, intent, MainActivity.OPEN_FILE_REQUEST_CODE);
+        });
+
         loadGamepadPlayerConfigs(view);
 
         if (MainActivity.DEBUG_MODE) {
@@ -229,6 +282,8 @@ public class SettingsFragment extends Fragment {
             editor.putString("box64_preset", Box64PresetManager.getSpinnerSelectedId(sBox64Preset));
             editor.putBoolean("move_cursor_to_touchpoint", cbMoveCursorToTouchpoint.isChecked());
             editor.putBoolean("capture_pointer_on_external_mouse", cbCapturePointerOnExternalMouse.isChecked());
+            editor.putBoolean("hide_system_cursor_on_external_mouse", cbHideSystemCursorOnExternalMouse.isChecked());
+            editor.putBoolean("frame_time_logger", cbFrameTimeLogger.isChecked());
             editor.putFloat("cursor_speed", sbCursorSpeed.getValue() / 100.0f);
             editor.putFloat("cursor_scale", sbCursorSize.getValue() / 100.0f);
             editor.putInt("cursor_color", cpvCursorColor.getColor());

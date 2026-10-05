@@ -173,6 +173,10 @@ public class InputControlsManager {
             }
 
             if (foundIndex != -1) {
+                // replacing a same-name profile: drop its old file too, so a
+                // restart cannot resurrect it as a duplicate
+                ControlsProfile replacedProfile = profiles.get(foundIndex);
+                FileUtils.delete(ControlsProfile.getProfileFile(context, replacedProfile.id));
                 profiles.set(foundIndex, newProfile);
             }
             else profiles.add(newProfile);

@@ -1,0 +1,70 @@
+package com.winlator.core;
+
+import java.io.File;
+
+/**
+ * Free-space estimation and checks. Pure Java (no Android dependencies) so the
+ * policy can be validated by plain JVM unit tests (see {@code StorageCheckerTest}).
+ */
+public abstract class StorageChecker {
+    /** Extra headroom kept free on top of the raw payload size. */
+    public static final long HEADROOM_BYTES = 64L * 1024 * 1024;
+
+    public static class Result {
+        public final boolean sufficient;
+        public final long requiredBytes;
+        public final long usableBytes;
+
+        public Result(boolean sufficient, long requiredBytes, long usableBytes) {
+            this.sufficient = sufficient;
+            this.requiredBytes = requiredBytes;
+            this.usableBytes = usableBytes;
+        }
+
+        public long missingBytes() {
+            return Math.max(0, requiredBytes - usableBytes);
+        }
+    }
+
+    /** Checks that {@code targetDir} (or its closest existing parent) has {@code requiredBytes} free. */
+    public static Result check(File targetDir, long requiredBytes) {
+        File probe = targetDir;
+        while (probe != null && !probe.isDirectory()) {
+            probe = probe.getParentFile();
+        }
+
+        long usable = probe != null ? probe.getUsableSpace() : 0;
+        return new Result(usable >= requiredBytes, requiredBytes, usable);
+    }
+
+    /**
+     * A staged rootfs install renames the live rootfs to a backup and the
+     * staging copy into place, so the only additional space needed is the
+     * staging copy itself plus headroom (no second full copy is created).
+     *
+     * @param extractedSize total size of the extracted rootfs content
+     */
+    public static Result checkRootfsInstall(File rootDir, long extractedSize) {
+        return check(rootDir, extractedSize + HEADROOM_BYTES);
+    }
+
+    /** An in-place wineprefix update runs wineboot and needs scratch space. */
+    public static Result checkWineprefixUpdate(File rootDir, long prefixSize) {
+        return check(rootDir, prefixSize / 2 + HEADROOM_BYTES);
+    }
+
+    /** Recursively sums the size of the regular files below {@code dir}. */
+    public static long dirSize(File dir) {
+        if (dir == null || !dir.exists()) return 0;
+
+        long size = 0;
+        File[] files = dir.listFiles();
+        if (files == null) return dir.length();
+
+        for (File file : files) {
+            if (file.isDirectory()) size += dirSize(file);
+            else size += file.length();
+        }
+        return size;
+    }
+}

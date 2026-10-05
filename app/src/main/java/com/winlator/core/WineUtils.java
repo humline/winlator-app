@@ -2,6 +2,7 @@ package com.winlator.core;
 
 import android.content.Context;
 
+import com.winlator.R;
 import com.winlator.container.Container;
 import com.winlator.container.Drive;
 import com.winlator.win32.MSLogFont;
@@ -184,6 +185,14 @@ public abstract class WineUtils {
         final File rootDir = rootFS.getRootDir();
         File tmpDir = rootFS.getTmpDir();
         if (!tmpDir.isDirectory()) tmpDir.mkdir();
+
+        // never start a migration that cannot finish: prefix working space is required
+        StorageChecker.Result storageResult = StorageChecker.checkWineprefixUpdate(rootDir, StorageChecker.dirSize(new File(rootDir, RootFS.WINEPREFIX)));
+        if (!storageResult.sufficient) {
+            AppUtils.showToast(context, R.string.not_enough_storage);
+            if (terminationCallback != null) terminationCallback.call(-1);
+            return;
+        }
 
         FileUtils.writeString(new File(rootDir, RootFS.WINEPREFIX+"/.update-timestamp"), "0\n");
 

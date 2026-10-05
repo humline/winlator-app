@@ -5,6 +5,7 @@ import android.content.Context;
 import androidx.annotation.NonNull;
 
 import com.winlator.core.FileUtils;
+import com.winlator.core.StagedInstaller;
 
 import java.io.File;
 import java.io.IOException;
@@ -85,6 +86,73 @@ public class RootFS {
 
     public File getLibDir() {
         return new File(rootDir, "/usr/lib");
+    }
+
+    /** Staging directory used for crash-safe rootfs updates (never the live rootfs). */
+    public File getStagingDir() {
+        return new File(rootDir.getParentFile(), "rootfs.staging");
+    }
+
+    /** Backup of the previous rootfs, kept until the first successful launch. */
+    public File getBackupDir() {
+        return new File(rootDir.getParentFile(), "rootfs.prev");
+    }
+
+    public boolean hasBackup() {
+        return getBackupDir().isDirectory();
+    }
+
+    /** Restores the previous rootfs from the backup. */
+    public boolean rollbackToBackup() {
+        return StagedInstaller.rollback(rootDir, getStagingDir(), getBackupDir());
+    }
+
+    /** Drops the backup of the previous rootfs. */
+    public void discardBackup() {
+        StagedInstaller.discardBackup(getBackupDir());
+    }
+
+    private File getLaunchMarkerFile() {
+        return new File(getImageInfoDir(), ".launching");
+    }
+
+    /** Marks the start of a container launch (crash marker until {@link #confirmLaunch()}). */
+    public void beginLaunch() {
+        getImageInfoDir().mkdirs();
+        File marker = getLaunchMarkerFile();
+        try {
+            marker.createNewFile();
+        }
+        catch (IOException e) {}
+    }
+
+    /** Confirms a successful launch: drops the crash marker and the update backup. */
+    public void confirmLaunch() {
+        FileUtils.delete(getLaunchMarkerFile());
+        discardBackup();
+    }
+
+    /**
+     * Recovers from a launch that crashed before {@link #confirmLaunch()} could
+     * run, and from a rootfs swap/rollback that was interrupted while the user
+     * data was in the backup (which leaves no launch marker behind because the
+     * marker moved away with the renamed rootfs). When an update backup is
+     * pending the rootfs is rolled back to the previous system. Returns
+     * {@code true} when a rollback was performed.
+     */
+    public boolean recoverFromInterruptedLaunch() {
+        // marker-independent: an interrupted swap must be recovered before
+        // anything can delete the backup holding the only copy of user data
+        if (StagedInstaller.recoverInterruptedSwap(rootDir, getBackupDir())) {
+            StagedInstaller.deleteRecursive(getStagingDir()); // payload of the aborted install
+            return true;
+        }
+
+        File marker = getLaunchMarkerFile();
+        if (!marker.exists()) return false;
+
+        FileUtils.delete(marker);
+        return hasBackup() && rollbackToBackup();
     }
 
     @NonNull

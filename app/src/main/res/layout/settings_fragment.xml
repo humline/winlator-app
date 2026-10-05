@@ -91,6 +91,20 @@
                         android:layout_height="wrap_content"
                         android:text="@string/capture_pointer_on_external_mouse"
                         android:layout_marginTop="8dp" />
+
+                    <CheckBox
+                        android:id="@+id/CBHideSystemCursorOnExternalMouse"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/hide_system_cursor_on_external_mouse"
+                        android:layout_marginTop="8dp" />
+
+                    <CheckBox
+                        android:id="@+id/CBFrameTimeLogger"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/frame_time_logger"
+                        android:layout_marginTop="8dp" />
                 </LinearLayout>
 
                 <TextView
@@ -509,6 +523,41 @@
                             android:layout_height="wrap_content"
                             android:layout_gravity="center_horizontal"
                             android:text="@string/reinstall_system_files" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_horizontal">
+
+                        <Button
+                            style="@style/ButtonNeutral"
+                            android:id="@+id/BTExportBackup"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/export_backup" />
+
+                        <Button
+                            style="@style/ButtonNeutral"
+                            android:id="@+id/BTImportBackup"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/import_backup" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_horizontal">
+
+                        <Button
+                            style="@style/ButtonNeutral"
+                            android:id="@+id/BTGraphicsDiagnostics"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/graphics_diagnostics" />
                     </LinearLayout>
                 </LinearLayout>
 

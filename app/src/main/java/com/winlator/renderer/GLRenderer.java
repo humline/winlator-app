@@ -12,6 +12,7 @@ import androidx.core.graphics.ColorUtils;
 import com.winlator.R;
 import com.winlator.core.Bitmask;
 import com.winlator.core.Callback;
+import com.winlator.core.FrameTimeLogger;
 import com.winlator.core.GPUHelper;
 import com.winlator.core.ImageUtils;
 import com.winlator.math.Mathf;
@@ -42,6 +43,7 @@ import javax.microedition.khronos.opengles.GL10;
 public class GLRenderer implements GLSurfaceView.Renderer, WindowManager.OnWindowModificationListener, Pointer.OnPointerMotionListener {
     public final XServerView xServerView;
     private final XServer xServer;
+    private FrameTimeLogger frameTimeLogger;
     protected final VertexAttribute quadVertices = new VertexAttribute("position", 2);
     private final float[] tmpXForm1 = XForm.getInstance();
     private final float[] tmpXForm2 = XForm.getInstance();
@@ -105,6 +107,10 @@ public class GLRenderer implements GLSurfaceView.Renderer, WindowManager.OnWindo
         viewportNeedsUpdate = true;
     }
 
+    public void setFrameTimeLogger(FrameTimeLogger frameTimeLogger) {
+        this.frameTimeLogger = frameTimeLogger;
+    }
+
     @Override
     public void onDrawFrame(GL10 gl) {
         if (toggleFullscreen) {
@@ -117,6 +123,8 @@ public class GLRenderer implements GLSurfaceView.Renderer, WindowManager.OnWindo
             effectComposer.render();
         }
         else drawFrame();
+
+        if (frameTimeLogger != null) frameTimeLogger.onFrame();
     }
 
     protected void drawFrame() {
