@@ -266,7 +266,6 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             this.dxwrapperConfig = DXWrappers.parseConfigs(dxwrapper, dxwrapperConfig);
         }
 
-        rootFS.beginLaunch();
         preloaderDialog.show(R.string.starting_up);
 
         inputControlsManager = new InputControlsManager(this);
@@ -306,9 +305,15 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         setupUI();
 
         Executors.newSingleThreadExecutor().execute(() -> {
+            // recover from a launch that crashed before it could confirm; this
+            // must run before the current launch marker is created, otherwise
+            // the current launch would be mistaken for a prior crash and roll
+            // back a pending rootfs update during its own first launch
             if (rootFS.recoverFromInterruptedLaunch()) {
                 AppUtils.showToast(this, R.string.restored_previous_system_files);
             }
+            rootFS.beginLaunch();
+
             if (!isGenerateWineprefix()) {
                 setupWineSystemFiles();
                 extractGraphicsDriverFiles();
