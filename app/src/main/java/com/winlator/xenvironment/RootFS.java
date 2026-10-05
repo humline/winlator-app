@@ -134,10 +134,20 @@ public class RootFS {
 
     /**
      * Recovers from a launch that crashed before {@link #confirmLaunch()} could
-     * run. When an update backup is pending the rootfs is rolled back to the
-     * previous system. Returns {@code true} when a rollback was performed.
+     * run, and from a rootfs swap/rollback that was interrupted while the user
+     * data was in the backup (which leaves no launch marker behind because the
+     * marker moved away with the renamed rootfs). When an update backup is
+     * pending the rootfs is rolled back to the previous system. Returns
+     * {@code true} when a rollback was performed.
      */
     public boolean recoverFromInterruptedLaunch() {
+        // marker-independent: an interrupted swap must be recovered before
+        // anything can delete the backup holding the only copy of user data
+        if (StagedInstaller.recoverInterruptedSwap(rootDir, getBackupDir())) {
+            StagedInstaller.deleteRecursive(getStagingDir()); // payload of the aborted install
+            return true;
+        }
+
         File marker = getLaunchMarkerFile();
         if (!marker.exists()) return false;
 

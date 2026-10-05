@@ -82,7 +82,11 @@ public abstract class StagedInstaller {
         ValidationResult result = validate(stagingDir);
         if (!result.valid) return false;
 
-        deleteRecursive(backupDir); // stale backup from an earlier attempt
+        // an earlier interrupted swap may still hold the only copy of the user
+        // data in the backup: restore it first instead of deleting it
+        if (backupHoldsUserData(backupDir) && !recoverInterruptedSwap(liveDir, backupDir)) return false;
+
+        deleteRecursive(backupDir); // stale backup from an earlier attempt (user data is in liveDir)
 
         boolean liveExisted = liveDir.isDirectory();
 
@@ -143,7 +147,54 @@ public abstract class StagedInstaller {
 
     /** Drops the backup after the first successful launch of the new system. */
     public static void discardBackup(File backupDir) {
+        // safety invariant: never erase the only copy of the user data
+        if (backupHoldsUserData(backupDir)) return;
         deleteRecursive(backupDir);
+    }
+
+    /**
+     * True when the backup still holds preserved user data. A completed
+     * {@link #commit(File, File, File)} or {@link #rollback(File, File, File)}
+     * always moves the preserved paths out of the backup, so a backup that
+     * still holds any of them means a swap/rollback was interrupted while the
+     * user data was in transit (and may be the only copy).
+     */
+    public static boolean backupHoldsUserData(File backupDir) {
+        if (backupDir == null || !backupDir.isDirectory()) return false;
+        for (String path : PRESERVED_PATHS) {
+            if (new File(backupDir, path).exists()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Recovers from a swap or rollback that was interrupted while the user
+     * data was in the backup (e.g. a crash between renaming the live rootfs to
+     * the backup and switching the staging into place): the data is reunified
+     * in the backup and the previous system is restored, so user data is never
+     * lost. Deliberately leaves {@code stagingDir} untouched (inside
+     * {@link #commit(File, File, File)} it holds the payload being installed).
+     * Returns {@code true} when a restore was performed.
+     */
+    public static boolean recoverInterruptedSwap(File liveDir, File backupDir) {
+        if (!backupHoldsUserData(backupDir)) return false;
+
+        // an interrupted preserved-paths move can leave part of the data in
+        // the live rootfs: move it back so the restored system holds everything
+        for (String path : PRESERVED_PATHS) {
+            File source = new File(liveDir, path);
+            File target = new File(backupDir, path);
+            if (source.exists() && !target.exists()) {
+                File parent = target.getParentFile();
+                if (parent != null) parent.mkdirs();
+                if (!source.renameTo(target)) return false;
+            }
+        }
+
+        // discard whatever partial content the interrupted swap left behind
+        // and restore the previous system (with its user data) as the live one
+        if (liveDir.isDirectory() && !deleteRecursive(liveDir)) return false;
+        return backupDir.renameTo(liveDir);
     }
 
     /** Recursively deletes files and directories; symlinks are removed as links. */

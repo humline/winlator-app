@@ -200,4 +200,98 @@ public class StagedInstallerTest {
         assertFalse(staging.exists());
         assertFalse(backup.exists());
     }
+
+    @Test
+    public void recoverInterruptedSwapRestoresSystemAndDataAfterCrashBetweenRenames() throws Exception {
+        File live = buildLiveSystem();
+        File staging = buildStaging();
+        File backup = new File(folder.getRoot(), "rootfs.prev");
+
+        // crash right after the live rootfs was renamed to the backup: the
+        // system and the only copy of the user data live in the backup
+        assertTrue(live.renameTo(backup));
+        assertFalse(live.exists());
+
+        assertTrue(StagedInstaller.recoverInterruptedSwap(live, backup));
+
+        // previous system and user data restored as the live rootfs
+        assertEquals("old", readFile(live, "etc/old.conf"));
+        assertEquals("save-data", readFile(live, "home/xuser-1/game.dat"));
+        assertEquals("custom-wine", readFile(live, "opt/installed-wine/wine-custom/bin/wine"));
+        assertFalse(backup.exists());
+
+        // the staged payload is left untouched for the retried install
+        assertEquals("new", readFile(staging, "etc/new.conf"));
+    }
+
+    @Test
+    public void recoverInterruptedSwapReunifiesPartiallyMovedData() throws Exception {
+        File live = buildLiveSystem();
+        File staging = buildStaging();
+        File backup = new File(folder.getRoot(), "rootfs.prev");
+
+        // swap interrupted in the middle of the preserved-paths move: home
+        // already arrived in the new live rootfs, installed-wine did not
+        assertTrue(StagedInstaller.deleteRecursive(new File(staging, "home")));
+        assertTrue(live.renameTo(backup));
+        assertTrue(staging.renameTo(live));
+        assertTrue(new File(backup, "home").renameTo(new File(live, "home")));
+
+        assertTrue(StagedInstaller.recoverInterruptedSwap(live, backup));
+
+        // both preserved paths are back together in the restored system
+        assertEquals("old", readFile(live, "etc/old.conf"));
+        assertEquals("save-data", readFile(live, "home/xuser-1/game.dat"));
+        assertEquals("custom-wine", readFile(live, "opt/installed-wine/wine-custom/bin/wine"));
+        assertFalse(backup.exists());
+    }
+
+    @Test
+    public void recoverInterruptedSwapIgnoresPendingBackupWithoutUserData() throws Exception {
+        File live = buildLiveSystem();
+        File staging = buildStaging();
+        File backup = new File(folder.getRoot(), "rootfs.prev");
+
+        // normal post-commit state: the backup holds the old system while the
+        // user data already lives in the live rootfs
+        assertTrue(StagedInstaller.commit(live, staging, backup));
+        assertFalse(StagedInstaller.backupHoldsUserData(backup));
+
+        assertFalse(StagedInstaller.recoverInterruptedSwap(live, backup));
+        assertTrue(live.isDirectory());
+        assertTrue(backup.isDirectory()); // kept until the first successful launch
+        assertEquals("save-data", readFile(live, "home/xuser-1/game.dat"));
+    }
+
+    @Test
+    public void commitAfterInterruptedSwapNeverDeletesTheOnlyCopyOfUserData() throws Exception {
+        File live = buildLiveSystem();
+        File staging = buildStaging();
+        File backup = new File(folder.getRoot(), "rootfs.prev");
+
+        // crash between the renames: system and user data exist only in the backup
+        assertTrue(live.renameTo(backup));
+
+        // the retried install reaches commit() again with a fresh payload
+        assertTrue(StagedInstaller.commit(live, staging, backup));
+
+        // the new system is live and the user data survived
+        assertEquals("new", readFile(live, "etc/new.conf"));
+        assertEquals("save-data", readFile(live, "home/xuser-1/game.dat"));
+        assertEquals("custom-wine", readFile(live, "opt/installed-wine/wine-custom/bin/wine"));
+    }
+
+    @Test
+    public void discardBackupKeepsBackupThatStillHoldsUserData() throws Exception {
+        File live = buildLiveSystem();
+        File backup = new File(folder.getRoot(), "rootfs.prev");
+
+        // interrupted swap: the backup holds the only copy of the user data
+        assertTrue(live.renameTo(backup));
+
+        StagedInstaller.discardBackup(backup);
+
+        assertTrue(backup.isDirectory()); // refused to erase the only copy
+        assertEquals("save-data", readFile(backup, "home/xuser-1/game.dat"));
+    }
 }
