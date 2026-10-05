@@ -48,6 +48,13 @@ public abstract class RootFSInstaller {
     }
 
     public static void install(final MainActivity activity) {
+        if (!AppUtils.isUiThread()) {
+            // UI setup (window flags, progress dialog) must run on the main
+            // thread; the extraction itself stays on the worker executor below
+            activity.runOnUiThread(() -> install(activity));
+            return;
+        }
+
         AppUtils.keepScreenOn(activity);
         final RootFS rootFS = RootFS.find(activity);
         final File rootDir = rootFS.getRootDir();
