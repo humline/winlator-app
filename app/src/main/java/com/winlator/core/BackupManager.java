@@ -58,6 +58,10 @@ public abstract class BackupManager {
     /** Upper bound for the expanded size of a restored backup (untrusted input). */
     public static final long MAX_EXTRACTED_BYTES = 8L * 1024 * 1024 * 1024;
 
+    public interface ProgressListener {
+        void onProgress(int percent);
+    }
+
     /**
      * Free cache space required before extracting a restored backup: roughly
      * twice the compressed size (typical expansion), with headroom for tiny
@@ -188,6 +192,10 @@ public abstract class BackupManager {
 
     /** Exports a container (including its shortcuts and .wine prefix) plus the input profiles. */
     public static File exportContainer(Context context, Container container) throws IOException {
+        return exportContainer(context, container, null);
+    }
+
+    public static File exportContainer(Context context, Container container, ProgressListener listener) throws IOException {
         File stagingDir = new File(context.getCacheDir(), "wcb_export");
         StagedInstaller.deleteRecursive(stagingDir);
         stagingDir.mkdirs();
@@ -211,7 +219,7 @@ public abstract class BackupManager {
             catch (JSONException e) {}
 
             File destination = new File(getBackupsDir(), sanitizeFileName(container.getName()) + EXTENSION);
-            return writeArchive(context, stagingDir, destination, meta);
+            return writeArchive(context, stagingDir, destination, meta, listener);
         }
         finally {
             StagedInstaller.deleteRecursive(stagingDir);
@@ -220,6 +228,10 @@ public abstract class BackupManager {
 
     /** Exports the input profiles and the shortcuts of every container. */
     public static File exportGlobal(Context context) throws IOException {
+        return exportGlobal(context, null);
+    }
+
+    public static File exportGlobal(Context context, ProgressListener listener) throws IOException {
         File stagingDir = new File(context.getCacheDir(), "wcb_export");
         StagedInstaller.deleteRecursive(stagingDir);
         stagingDir.mkdirs();
@@ -255,7 +267,7 @@ public abstract class BackupManager {
             catch (JSONException e) {}
 
             File destination = new File(getBackupsDir(), "winlator-backup" + EXTENSION);
-            return writeArchive(context, stagingDir, destination, meta);
+            return writeArchive(context, stagingDir, destination, meta, listener);
         }
         finally {
             StagedInstaller.deleteRecursive(stagingDir);
@@ -273,7 +285,7 @@ public abstract class BackupManager {
         }
     }
 
-    private static File writeArchive(Context context, File stagingDir, File destination, JSONObject meta) throws IOException {
+    private static File writeArchive(Context context, File stagingDir, File destination, JSONObject meta, ProgressListener listener) throws IOException {
         try {
             meta.put("appVersion", getAppVersion(context));
             meta.put("rfsVersion", RootFS.find(context).getVersion());
@@ -288,7 +300,10 @@ public abstract class BackupManager {
         if (parent != null) parent.mkdirs();
 
         try {
-            TarCompressorUtils.compress(TarCompressorUtils.Type.ZSTD, stagingDir.listFiles(), destination, 3);
+            TarCompressorUtils.compress(TarCompressorUtils.Type.ZSTD, stagingDir.listFiles(), destination, 3, listener == null ? null : (processed, total) -> {
+                int percent = total > 0 ? (int)Math.min(99, processed * 99 / total) : 99;
+                listener.onProgress(percent);
+            });
             if (!destination.isFile()) throw new IOException("unable to write the backup archive");
             // an incomplete archive must never be reported as a successful backup
             // (the migration flow relies on this to decide whether it may proceed)
@@ -300,6 +315,7 @@ public abstract class BackupManager {
         }
 
         MediaScannerConnection.scanFile(context, new String[]{destination.getAbsolutePath()}, null, null);
+        if (listener != null) listener.onProgress(100);
         return destination;
     }
 
@@ -357,6 +373,10 @@ public abstract class BackupManager {
      * are reported as conflicts and skipped.
      */
     public static RestoreResult restore(Context context, Uri source) {
+        return restore(context, source, null);
+    }
+
+    public static RestoreResult restore(Context context, Uri source, ProgressListener listener) {
         RestoreResult result = new RestoreResult();
         File tmpDir = new File(context.getCacheDir(), "wcb_restore");
         StagedInstaller.deleteRecursive(tmpDir);
@@ -382,7 +402,10 @@ public abstract class BackupManager {
             File extractedDir = new File(tmpDir, "extracted");
             extractedDir.mkdirs();
             // untrusted input: strict path containment and size cap during extraction
-            if (!TarCompressorUtils.extractSafe(TarCompressorUtils.Type.ZSTD, archiveFile, extractedDir, MAX_EXTRACTED_BYTES)) {
+            if (!TarCompressorUtils.extractSafe(TarCompressorUtils.Type.ZSTD, archiveFile, extractedDir, MAX_EXTRACTED_BYTES, listener == null ? null : (processed, total) -> {
+                int percent = total > 0 ? 10 + (int)Math.min(89, processed * 89 / total) : 99;
+                listener.onProgress(percent);
+            })) {
                 result.errors.add("unable to extract the backup archive");
                 return result;
             }
@@ -393,6 +416,7 @@ public abstract class BackupManager {
             restoreContainer(context, extractedDir, result);
             restoreProfiles(context, extractedDir, result);
             restoreShortcuts(context, extractedDir, result);
+            if (listener != null) listener.onProgress(100);
         }
         catch (IOException e) {
             result.errors.add("unable to read the backup archive (" + e.getMessage() + ")");

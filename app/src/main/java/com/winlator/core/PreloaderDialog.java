@@ -11,6 +11,7 @@ import com.winlator.R;
 public class PreloaderDialog {
     private final Activity activity;
     private Dialog dialog;
+    private int progressTextResId = -1;
 
     public PreloaderDialog(Activity activity) {
         this.activity = activity;
@@ -36,7 +37,28 @@ public class PreloaderDialog {
         close();
         if (dialog == null) create();
         ((TextView)dialog.findViewById(R.id.TextView)).setText(textResId);
+        progressTextResId = -1;
         dialog.show();
+    }
+
+    public synchronized void showProgress(int textResId) {
+        show(textResId);
+        progressTextResId = textResId;
+        updateProgress(0);
+    }
+
+    public void setProgress(final int percent) {
+        activity.runOnUiThread(() -> {
+            synchronized (PreloaderDialog.this) {
+                if (progressTextResId != -1) updateProgress(percent);
+            }
+        });
+    }
+
+    private void updateProgress(int percent) {
+        int boundedPercent = Math.max(0, Math.min(100, percent));
+        TextView textView = dialog.findViewById(R.id.TextView);
+        textView.setText(activity.getString(progressTextResId) + " " + boundedPercent + "%");
     }
 
     public void showOnUiThread(final int textResId) {

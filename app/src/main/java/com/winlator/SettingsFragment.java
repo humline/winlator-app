@@ -234,11 +234,11 @@ public class SettingsFragment extends Fragment {
         });
 
         view.findViewById(R.id.BTExportBackup).setOnClickListener((v) -> {
-            preloaderDialog.show(R.string.exporting_backup);
+            preloaderDialog.showProgress(R.string.exporting_backup);
             Executors.newSingleThreadExecutor().execute(() -> {
                 File file = null;
                 try {
-                    file = BackupManager.exportGlobal(context);
+                    file = BackupManager.exportGlobal(context, preloaderDialog::setProgress);
                 }
                 catch (IOException e) {}
                 preloaderDialog.closeOnUiThread();
@@ -256,9 +256,9 @@ public class SettingsFragment extends Fragment {
 
         view.findViewById(R.id.BTImportBackup).setOnClickListener((v) -> {
             selectBackupFileCallback = (uri) -> {
-                preloaderDialog.show(R.string.importing_backup);
+                preloaderDialog.showProgress(R.string.importing_backup);
                 Executors.newSingleThreadExecutor().execute(() -> {
-                    BackupManager.RestoreResult result = BackupManager.restore(context, uri);
+                    BackupManager.RestoreResult result = BackupManager.restore(context, uri, preloaderDialog::setProgress);
                     preloaderDialog.closeOnUiThread();
                     if (result.isSuccess()) {
                         AppUtils.showToast(context, result.conflicts.isEmpty() ? R.string.backup_restored : R.string.backup_restored_with_conflicts);

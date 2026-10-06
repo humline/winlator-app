@@ -21,6 +21,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -29,14 +30,26 @@ import java.util.concurrent.atomic.AtomicLong;
 public abstract class TarCompressorUtils {
     public enum Type {XZ, ZSTD}
 
+    public interface ProgressListener {
+        void onProgress(long bytesProcessed, long totalBytes);
+    }
+
     public interface OnExtractFileListener {
         File onExtractFile(File destination, long size);
     }
 
-    private static void addFile(ArchiveOutputStream tar, File file, String entryName) throws IOException {
+    private static void addFile(ArchiveOutputStream tar, File file, String entryName, ProgressListener listener, AtomicLong bytesProcessed, long totalBytes) throws IOException {
         tar.putArchiveEntry(tar.createArchiveEntry(file, entryName));
         try (BufferedInputStream inStream = new BufferedInputStream(new FileInputStream(file), StreamUtils.BUFFER_SIZE)) {
-            if (!StreamUtils.copy(inStream, tar)) throw new IOException("unable to read " + entryName);
+            byte[] buffer = new byte[StreamUtils.BUFFER_SIZE];
+            int amountRead;
+            while ((amountRead = inStream.read(buffer)) != -1) {
+                tar.write(buffer, 0, amountRead);
+                if (listener != null) {
+                    bytesProcessed.addAndGet(amountRead);
+                    listener.onProgress(bytesProcessed.get(), totalBytes);
+                }
+            }
         }
         tar.closeArchiveEntry();
     }
@@ -48,7 +61,7 @@ public abstract class TarCompressorUtils {
         tar.closeArchiveEntry();
     }
 
-    private static void addDirectory(ArchiveOutputStream tar, File folder, String basePath) throws IOException {
+    private static void addDirectory(ArchiveOutputStream tar, File folder, String basePath, ProgressListener listener, AtomicLong bytesProcessed, long totalBytes) throws IOException {
         File[] files = folder.listFiles();
         if (files == null) return;
         for (File file : files) {
@@ -59,9 +72,9 @@ public abstract class TarCompressorUtils {
                 String entryName = basePath+file.getName() + "/";
                 tar.putArchiveEntry(tar.createArchiveEntry(folder, entryName));
                 tar.closeArchiveEntry();
-                addDirectory(tar, file, entryName);
+                addDirectory(tar, file, entryName, listener, bytesProcessed, totalBytes);
             }
-            else addFile(tar, file, basePath+file.getName());
+            else addFile(tar, file, basePath+file.getName(), listener, bytesProcessed, totalBytes);
         }
     }
 
@@ -75,6 +88,16 @@ public abstract class TarCompressorUtils {
 
     /** Compresses {@code files} into {@code destination}; I/O failures are propagated to the caller. */
     public static void compress(Type type, File[] files, File destination, int level) throws IOException {
+        compress(type, files, destination, level, null);
+    }
+
+    public static void compress(Type type, File[] files, File destination, int level, ProgressListener listener) throws IOException {
+        long totalBytes = 0;
+        if (listener != null) {
+            for (File file : files) totalBytes += getFileSize(file);
+            if (totalBytes == 0) listener.onProgress(0, 0);
+        }
+        AtomicLong bytesProcessed = new AtomicLong();
         try (OutputStream outStream = getCompressorOutputStream(type, destination, level);
              TarArchiveOutputStream tar = new TarArchiveOutputStream(outStream)) {
             tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_GNU);
@@ -90,12 +113,24 @@ public abstract class TarCompressorUtils {
                         tar.putArchiveEntry(tar.createArchiveEntry(file, basePath));
                         tar.closeArchiveEntry();
                     }
-                    addDirectory(tar, file, basePath);
+                    addDirectory(tar, file, basePath, listener, bytesProcessed, totalBytes);
                 }
-                else addFile(tar, file, file.getName());
+                else addFile(tar, file, file.getName(), listener, bytesProcessed, totalBytes);
             }
             tar.finish();
         }
+    }
+
+    private static long getFileSize(File file) {
+        if (FileUtils.isSymlink(file)) return 0;
+        if (file.isFile()) return file.length();
+        if (!file.isDirectory()) return 0;
+        long size = 0;
+        File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) size += getFileSize(child);
+        }
+        return size;
     }
 
     public static boolean extract(Type type, Context context, String assetFile, File destination) {
@@ -204,8 +239,40 @@ public abstract class TarCompressorUtils {
      * violation; partial output is left for the caller to clean up.
      */
     public static boolean extractSafe(Type type, File source, File destination, long maxTotalBytes) {
+        return extractSafe(type, source, destination, maxTotalBytes, null);
+    }
+
+    public static boolean extractSafe(Type type, File source, File destination, long maxTotalBytes, ProgressListener listener) {
         if (source == null || !source.isFile()) return false;
-        try (InputStream inStream = getCompressorInputStream(type, new BufferedInputStream(new FileInputStream(source), StreamUtils.BUFFER_SIZE));
+        AtomicLong bytesProcessed = new AtomicLong();
+        InputStream sourceStream;
+        try {
+            InputStream fileStream = new BufferedInputStream(new FileInputStream(source), StreamUtils.BUFFER_SIZE);
+            sourceStream = listener == null ? fileStream : new FilterInputStream(fileStream) {
+                @Override
+                public int read() throws IOException {
+                    int value = super.read();
+                    if (value != -1) reportProgress(1);
+                    return value;
+                }
+
+                @Override
+                public int read(byte[] buffer, int offset, int length) throws IOException {
+                    int count = super.read(buffer, offset, length);
+                    if (count > 0) reportProgress(count);
+                    return count;
+                }
+
+                private void reportProgress(int count) {
+                    long processed = bytesProcessed.addAndGet(count);
+                    listener.onProgress(processed, source.length());
+                }
+            };
+        }
+        catch (IOException e) {
+            return false;
+        }
+        try (InputStream inStream = getCompressorInputStream(type, sourceStream);
              ArchiveInputStream tar = new TarArchiveInputStream(inStream)) {
             String destPath = destination.getCanonicalPath();
             long totalSize = 0;
