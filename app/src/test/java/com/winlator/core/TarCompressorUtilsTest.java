@@ -261,4 +261,35 @@ public class TarCompressorUtilsTest {
         }
         catch (IOException expected) {}
     }
+
+    @Test
+    public void compressReportsByteProgress() throws Exception {
+        File input = folder.newFolder("input");
+        Files.write(new File(input, "data.txt").toPath(), "backup-data".getBytes(StandardCharsets.UTF_8));
+        File archive = new File(folder.getRoot(), "progress.tar.xz");
+        long[] lastProgress = {-1};
+
+        TarCompressorUtils.compress(TarCompressorUtils.Type.XZ, input, archive, 3, (processed, total) -> {
+            assertTrue(processed >= lastProgress[0]);
+            lastProgress[0] = processed;
+            assertEquals(11, total);
+        });
+
+        assertEquals(11, lastProgress[0]);
+    }
+
+    @Test
+    public void extractSafeReportsByteProgress() throws Exception {
+        File archive = buildArchive("progress.tar.xz", Entry.file("data.txt", "backup-data"));
+        File destination = folder.newFolder("progress-destination");
+        long[] lastProgress = {-1};
+
+        assertTrue(TarCompressorUtils.extractSafe(TarCompressorUtils.Type.XZ, archive, destination, 0, (processed, total) -> {
+            assertTrue(processed >= lastProgress[0]);
+            lastProgress[0] = processed;
+            assertEquals(archive.length(), total);
+        }));
+
+        assertEquals(archive.length(), lastProgress[0]);
+    }
 }

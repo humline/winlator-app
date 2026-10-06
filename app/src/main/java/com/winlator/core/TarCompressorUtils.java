@@ -86,6 +86,10 @@ public abstract class TarCompressorUtils {
         compress(type, new File[]{file}, destination, level);
     }
 
+    public static void compress(Type type, File file, File destination, int level, ProgressListener listener) throws IOException {
+        compress(type, new File[]{file}, destination, level, listener);
+    }
+
     /** Compresses {@code files} into {@code destination}; I/O failures are propagated to the caller. */
     public static void compress(Type type, File[] files, File destination, int level) throws IOException {
         compress(type, files, destination, level, null);

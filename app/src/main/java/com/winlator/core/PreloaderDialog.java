@@ -72,6 +72,7 @@ public class PreloaderDialog {
             }
         }
         catch (Exception e) {}
+        progressTextResId = -1;
     }
 
     public void closeOnUiThread() {
