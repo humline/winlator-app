@@ -33,6 +33,10 @@ import java.util.UUID;
 import java.util.concurrent.Executors;
 
 public abstract class FileUtils {
+    public interface ProgressListener {
+        void onProgress(long bytesProcessed, long totalBytes);
+    }
+
     public static byte[] read(Context context, String assetFile) {
         try (InputStream inStream = context.getAssets().open(assetFile)) {
             return StreamUtils.copyToByteArray(inStream);
@@ -188,6 +192,58 @@ public abstract class FileUtils {
             }
         }
         return true;
+    }
+
+    public static boolean copy(File srcFile, File dstFile, Callback<File> callback, ProgressListener progressListener) {
+        if (progressListener == null) return copy(srcFile, dstFile, callback);
+        return copyWithProgress(srcFile, dstFile, callback, progressListener, new long[1], getTotalFileSize(srcFile));
+    }
+
+    private static boolean copyWithProgress(File srcFile, File dstFile, Callback<File> callback, ProgressListener listener, long[] bytesProcessed, long totalBytes) {
+        if (isSymlink(srcFile)) return true;
+        if (srcFile.isDirectory()) {
+            if (isAscendantOf(srcFile, dstFile) || (!dstFile.exists() && !dstFile.mkdirs())) return false;
+            if (callback != null) callback.call(dstFile);
+
+            String[] filenames = srcFile.list();
+            if (filenames != null) {
+                for (String filename : filenames) {
+                    if (!copyWithProgress(new File(srcFile, filename), new File(dstFile, filename), callback, listener, bytesProcessed, totalBytes)) return false;
+                }
+            }
+        }
+        else {
+            File parent = dstFile.getParentFile();
+            if (!srcFile.exists() || (parent != null && !parent.exists() && !parent.mkdirs())) return false;
+
+            try (BufferedInputStream inStream = new BufferedInputStream(new FileInputStream(srcFile), StreamUtils.BUFFER_SIZE);
+                 BufferedOutputStream outStream = new BufferedOutputStream(new FileOutputStream(dstFile), StreamUtils.BUFFER_SIZE)) {
+                byte[] buffer = new byte[StreamUtils.BUFFER_SIZE];
+                int amountRead;
+                while ((amountRead = inStream.read(buffer)) != -1) {
+                    outStream.write(buffer, 0, amountRead);
+                    bytesProcessed[0] += amountRead;
+                    listener.onProgress(bytesProcessed[0], totalBytes);
+                }
+            }
+            catch (IOException e) {
+                return false;
+            }
+            if (callback != null) callback.call(dstFile);
+        }
+        return true;
+    }
+
+    public static long getTotalFileSize(File file) {
+        if (isSymlink(file)) return 0;
+        if (file.isFile()) return file.length();
+        if (!file.isDirectory()) return 0;
+        long size = 0;
+        String[] filenames = file.list();
+        if (filenames != null) {
+            for (String filename : filenames) size += getTotalFileSize(new File(file, filename));
+        }
+        return size;
     }
 
     public static void copy(Context context, String assetFile, File dstFile) {

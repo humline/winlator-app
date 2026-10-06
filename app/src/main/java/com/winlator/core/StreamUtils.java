@@ -8,6 +8,10 @@ import java.io.OutputStream;
 public class StreamUtils {
     public static final int BUFFER_SIZE = 64 * 1024;
 
+    public interface ProgressListener {
+        void onProgress(long bytesProcessed, long totalBytes);
+    }
+
     public static int skip(InputStream inStream, int bytesToSkip) {
         try {
             int bytesSkipped = (int)inStream.skip(bytesToSkip);
@@ -58,6 +62,10 @@ public class StreamUtils {
      * or truncated sources cannot consume unbounded disk space.
      */
     public static void copyCapped(InputStream inStream, OutputStream outStream, long maxBytes) throws IOException {
+        copyCapped(inStream, outStream, maxBytes, -1, null);
+    }
+
+    public static void copyCapped(InputStream inStream, OutputStream outStream, long maxBytes, long totalBytes, ProgressListener listener) throws IOException {
         byte[] buffer = new byte[BUFFER_SIZE];
         long total = 0;
         int amountRead;
@@ -65,6 +73,7 @@ public class StreamUtils {
             total += amountRead;
             if (maxBytes > 0 && total > maxBytes) throw new IOException("input exceeds " + maxBytes + " bytes");
             outStream.write(buffer, 0, amountRead);
+            if (listener != null) listener.onProgress(total, totalBytes);
         }
         outStream.flush();
     }

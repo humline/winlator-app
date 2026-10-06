@@ -1,9 +1,11 @@
 package com.winlator.core;
 
 import android.content.Context;
+import android.database.Cursor;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Environment;
+import android.provider.OpenableColumns;
 
 import com.winlator.container.Container;
 import com.winlator.container.ContainerManager;
@@ -57,6 +59,38 @@ public abstract class BackupManager {
     public static final long MAX_ARCHIVE_BYTES = 4L * 1024 * 1024 * 1024;
     /** Upper bound for the expanded size of a restored backup (untrusted input). */
     public static final long MAX_EXTRACTED_BYTES = 8L * 1024 * 1024 * 1024;
+
+    public interface ProgressListener {
+        void onProgress(int percent);
+    }
+
+    private static long getContentLength(Context context, Uri source) {
+        if (source == null) return -1;
+        try (Cursor cursor = context.getContentResolver().query(source, new String[]{OpenableColumns.SIZE}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int columnIndex = cursor.getColumnIndex(OpenableColumns.SIZE);
+                return columnIndex >= 0 ? cursor.getLong(columnIndex) : -1;
+            }
+        }
+        catch (Exception e) {}
+        return -1;
+    }
+
+    private static class ProgressReporter {
+        private final ProgressListener listener;
+        private int lastPercent = -1;
+
+        ProgressReporter(ProgressListener listener) {
+            this.listener = listener;
+        }
+
+        void report(int percent) {
+            if (listener != null && percent != lastPercent) {
+                lastPercent = percent;
+                listener.onProgress(percent);
+            }
+        }
+    }
 
     /**
      * Free cache space required before extracting a restored backup: roughly
@@ -188,6 +222,10 @@ public abstract class BackupManager {
 
     /** Exports a container (including its shortcuts and .wine prefix) plus the input profiles. */
     public static File exportContainer(Context context, Container container) throws IOException {
+        return exportContainer(context, container, null);
+    }
+
+    public static File exportContainer(Context context, Container container, ProgressListener listener) throws IOException {
         File stagingDir = new File(context.getCacheDir(), "wcb_export");
         StagedInstaller.deleteRecursive(stagingDir);
         stagingDir.mkdirs();
@@ -195,10 +233,12 @@ public abstract class BackupManager {
         try {
             File containerStaging = new File(stagingDir, CONTAINER_DIR);
             containerStaging.mkdirs();
-            if (!FileUtils.copy(container.getRootDir(), containerStaging, (file) -> FileUtils.chmod(file, 0771))) {
+            File profilesDir = InputControlsManager.getProfilesDir(context);
+            ExportProgress progress = new ExportProgress(listener, container.getRootDir(), profilesDir);
+            if (!progress.copy(container.getRootDir(), containerStaging, (file) -> FileUtils.chmod(file, 0771))) {
                 throw new IOException("unable to copy the container directory");
             }
-            copyProfiles(context, stagingDir);
+            copyProfiles(context, stagingDir, progress);
 
             JSONObject meta = new JSONObject();
             try {
@@ -211,7 +251,7 @@ public abstract class BackupManager {
             catch (JSONException e) {}
 
             File destination = new File(getBackupsDir(), sanitizeFileName(container.getName()) + EXTENSION);
-            return writeArchive(context, stagingDir, destination, meta);
+            return writeArchive(context, stagingDir, destination, meta, listener);
         }
         finally {
             StagedInstaller.deleteRecursive(stagingDir);
@@ -220,24 +260,37 @@ public abstract class BackupManager {
 
     /** Exports the input profiles and the shortcuts of every container. */
     public static File exportGlobal(Context context) throws IOException {
+        return exportGlobal(context, null);
+    }
+
+    public static File exportGlobal(Context context, ProgressListener listener) throws IOException {
         File stagingDir = new File(context.getCacheDir(), "wcb_export");
         StagedInstaller.deleteRecursive(stagingDir);
         stagingDir.mkdirs();
 
         try {
-            copyProfiles(context, stagingDir);
+            ContainerManager manager = new ContainerManager(context);
+            List<Container> containers = manager.getContainers();
+            List<File> copySources = new ArrayList<>();
+            File profilesDir = InputControlsManager.getProfilesDir(context);
+            copySources.add(profilesDir);
+            for (Container container : containers) {
+                File desktopDir = new File(container.getUserDir(), "Desktop");
+                if (desktopDir.isDirectory()) copySources.add(desktopDir);
+            }
+            ExportProgress progress = new ExportProgress(listener, copySources.toArray(new File[0]));
+            copyProfiles(context, stagingDir, progress);
 
             File shortcutsStaging = new File(stagingDir, SHORTCUTS_DIR);
             shortcutsStaging.mkdirs();
-            ContainerManager manager = new ContainerManager(context);
-            for (Container container : manager.getContainers()) {
+            for (Container container : containers) {
                 File desktopDir = new File(container.getUserDir(), "Desktop");
                 if (desktopDir.isDirectory()) {
                     // key by the stable container id so same-named containers
                     // can never merge into one shortcut group
                     File target = new File(shortcutsStaging, shortcutsFolderName(container.id));
                     target.mkdirs();
-                    if (!FileUtils.copy(desktopDir, target, (file) -> FileUtils.chmod(file, 0771))) {
+                    if (!progress.copy(desktopDir, target, (file) -> FileUtils.chmod(file, 0771))) {
                         throw new IOException("unable to copy the shortcuts of " + container.getName());
                     }
 
@@ -255,25 +308,53 @@ public abstract class BackupManager {
             catch (JSONException e) {}
 
             File destination = new File(getBackupsDir(), "winlator-backup" + EXTENSION);
-            return writeArchive(context, stagingDir, destination, meta);
+            return writeArchive(context, stagingDir, destination, meta, listener);
         }
         finally {
             StagedInstaller.deleteRecursive(stagingDir);
         }
     }
 
-    private static void copyProfiles(Context context, File stagingDir) throws IOException {
+    private static void copyProfiles(Context context, File stagingDir, ExportProgress progress) throws IOException {
         File profilesDir = InputControlsManager.getProfilesDir(context);
         if (profilesDir.isDirectory()) {
             File profilesStaging = new File(stagingDir, PROFILES_DIR);
             profilesStaging.mkdirs();
-            if (!FileUtils.copy(profilesDir, profilesStaging, (file) -> FileUtils.chmod(file, 0771))) {
+            if (!progress.copy(profilesDir, profilesStaging, (file) -> FileUtils.chmod(file, 0771))) {
                 throw new IOException("unable to copy the input profiles");
             }
         }
     }
 
-    private static File writeArchive(Context context, File stagingDir, File destination, JSONObject meta) throws IOException {
+    private static class ExportProgress {
+        private final ProgressListener listener;
+        private final ProgressReporter reporter;
+        private final long totalBytes;
+        private long completedBytes;
+
+        ExportProgress(ProgressListener listener, File... sources) {
+            this.listener = listener;
+            reporter = listener != null ? new ProgressReporter(listener) : null;
+            long total = 0;
+            for (File source : sources) total += FileUtils.getTotalFileSize(source);
+            totalBytes = total;
+        }
+
+        boolean copy(File source, File destination, Callback<File> callback) {
+            if (listener == null) return FileUtils.copy(source, destination, callback);
+
+            long sourceBytes = FileUtils.getTotalFileSize(source);
+            long base = completedBytes;
+            boolean copied = FileUtils.copy(source, destination, callback, (processed, total) -> {
+                int percent = totalBytes > 0 ? (int)Math.min(45, (base + processed) * 45 / totalBytes) : 45;
+                reporter.report(percent);
+            });
+            if (copied) completedBytes += sourceBytes;
+            return copied;
+        }
+    }
+
+    private static File writeArchive(Context context, File stagingDir, File destination, JSONObject meta, ProgressListener listener) throws IOException {
         try {
             meta.put("appVersion", getAppVersion(context));
             meta.put("rfsVersion", RootFS.find(context).getVersion());
@@ -287,8 +368,12 @@ public abstract class BackupManager {
         File parent = destination.getParentFile();
         if (parent != null) parent.mkdirs();
 
+        ProgressReporter reporter = listener != null ? new ProgressReporter(listener) : null;
         try {
-            TarCompressorUtils.compress(TarCompressorUtils.Type.ZSTD, stagingDir.listFiles(), destination, 3);
+            TarCompressorUtils.compress(TarCompressorUtils.Type.ZSTD, stagingDir.listFiles(), destination, 3, reporter == null ? null : (processed, total) -> {
+                int percent = total > 0 ? 45 + (int)Math.min(54, processed * 54 / total) : 99;
+                reporter.report(percent);
+            });
             if (!destination.isFile()) throw new IOException("unable to write the backup archive");
             // an incomplete archive must never be reported as a successful backup
             // (the migration flow relies on this to decide whether it may proceed)
@@ -300,6 +385,7 @@ public abstract class BackupManager {
         }
 
         MediaScannerConnection.scanFile(context, new String[]{destination.getAbsolutePath()}, null, null);
+        if (reporter != null) reporter.report(100);
         return destination;
     }
 
@@ -357,18 +443,26 @@ public abstract class BackupManager {
      * are reported as conflicts and skipped.
      */
     public static RestoreResult restore(Context context, Uri source) {
+        return restore(context, source, null);
+    }
+
+    public static RestoreResult restore(Context context, Uri source, ProgressListener listener) {
         RestoreResult result = new RestoreResult();
+        ProgressReporter reporter = listener != null ? new ProgressReporter(listener) : null;
         File tmpDir = new File(context.getCacheDir(), "wcb_restore");
         StagedInstaller.deleteRecursive(tmpDir);
         tmpDir.mkdirs();
 
         try {
             File archiveFile = new File(tmpDir, "backup" + EXTENSION);
+            long sourceSize = getContentLength(context, source);
             try (InputStream inStream = context.getContentResolver().openInputStream(source);
                  OutputStream outStream = new FileOutputStream(archiveFile)) {
                 if (inStream == null) throw new IOException("unable to read the source file");
                 // bounded copy: a huge or malicious file cannot fill the cache
-                StreamUtils.copyCapped(inStream, outStream, MAX_ARCHIVE_BYTES);
+                StreamUtils.copyCapped(inStream, outStream, MAX_ARCHIVE_BYTES, sourceSize, reporter == null || sourceSize <= 0 ? null : (processed, total) -> {
+                    reporter.report((int)Math.min(9, processed * 10 / total));
+                });
             }
 
             // preflight before extracting: the cache must be able to hold the
@@ -382,7 +476,10 @@ public abstract class BackupManager {
             File extractedDir = new File(tmpDir, "extracted");
             extractedDir.mkdirs();
             // untrusted input: strict path containment and size cap during extraction
-            if (!TarCompressorUtils.extractSafe(TarCompressorUtils.Type.ZSTD, archiveFile, extractedDir, MAX_EXTRACTED_BYTES)) {
+            if (!TarCompressorUtils.extractSafe(TarCompressorUtils.Type.ZSTD, archiveFile, extractedDir, MAX_EXTRACTED_BYTES, reporter == null ? null : (processed, total) -> {
+                int percent = total > 0 ? 10 + (int)Math.min(89, processed * 89 / total) : 99;
+                reporter.report(percent);
+            })) {
                 result.errors.add("unable to extract the backup archive");
                 return result;
             }
@@ -393,6 +490,7 @@ public abstract class BackupManager {
             restoreContainer(context, extractedDir, result);
             restoreProfiles(context, extractedDir, result);
             restoreShortcuts(context, extractedDir, result);
+            if (reporter != null) reporter.report(100);
         }
         catch (IOException e) {
             result.errors.add("unable to read the backup archive (" + e.getMessage() + ")");

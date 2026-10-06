@@ -344,11 +344,11 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
     /** Exports a container backup first and then runs the wineprefix migration. */
     private void backupContainerThenUpdate(PreloaderDialog preloaderDialog) {
-        preloaderDialog.show(R.string.exporting_backup);
+        preloaderDialog.showProgress(R.string.exporting_backup);
         Executors.newSingleThreadExecutor().execute(() -> {
             File exported = null;
             try {
-                exported = BackupManager.exportContainer(this, container);
+                exported = BackupManager.exportContainer(this, container, preloaderDialog::setProgress);
             }
             catch (IOException e) {}
             final File backupFile = exported;

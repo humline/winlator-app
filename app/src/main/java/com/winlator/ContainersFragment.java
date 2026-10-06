@@ -107,9 +107,9 @@ public class ContainersFragment extends Fragment {
             final Context context = getContext();
             if (!RootFS.find(context).isValid()) return false;
             selectFileCallback = (uri) -> {
-                preloaderDialog.show(R.string.importing_backup);
+                preloaderDialog.showProgress(R.string.importing_backup);
                 Executors.newSingleThreadExecutor().execute(() -> {
-                    BackupManager.RestoreResult result = BackupManager.restore(context, uri);
+                    BackupManager.RestoreResult result = BackupManager.restore(context, uri, preloaderDialog::setProgress);
                     preloaderDialog.closeOnUiThread();
                     if (result.isSuccess()) {
                         AppUtils.showToast(context, result.conflicts.isEmpty() ? R.string.backup_restored : R.string.backup_restored_with_conflicts);
@@ -208,11 +208,11 @@ public class ContainersFragment extends Fragment {
                         });
                         break;
                     case R.id.menu_item_export:
-                        preloaderDialog.show(R.string.exporting_backup);
+                        preloaderDialog.showProgress(R.string.exporting_backup);
                         Executors.newSingleThreadExecutor().execute(() -> {
                             File file = null;
                             try {
-                                file = BackupManager.exportContainer(activity, container);
+                                file = BackupManager.exportContainer(activity, container, preloaderDialog::setProgress);
                             }
                             catch (IOException e) {}
                             preloaderDialog.closeOnUiThread();
