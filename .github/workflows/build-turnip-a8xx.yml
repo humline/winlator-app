@@ -1,0 +1,28 @@
+name: Build Turnip a8xx
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_repo:
+        description: Mesa git repository (use an a8xx fork if mainline lacks support)
+        default: https://gitlab.freedesktop.org/mesa/mesa.git
+      mesa_ref:
+        description: Branch or tag
+        default: main
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build glslang-tools python3-mako python3-yaml ccache zip pkg-config bison flex
+      - name: Build
+        env:
+          MESA_REPO: ${{ inputs.mesa_repo }}
+          MESA_REF: ${{ inputs.mesa_ref }}
+        run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" ./scripts/build-turnip-a8xx.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turnip-a8xx
+          path: out/turnip-a8xx.zip
