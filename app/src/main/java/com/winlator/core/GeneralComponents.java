@@ -29,6 +29,7 @@ import java.util.Locale;
 public abstract class GeneralComponents {
     public enum InstallMode {DOWNLOAD, FILE, BOTH}
     private static final String INSTALLABLE_COMPONENTS_URL = "https://raw.githubusercontent.com/brunodev85/winlator/main/installable_components/%s";
+    private static final String TURNIP_A8XX_RELEASE_URL = "https://api.github.com/repos/DiskDVD/TurniptoolsA8XX/releases/latest";
 
     public enum Type {
         BOX64, TURNIP, DXVK, VKD3D, WINED3D, SOUNDFONT, ADRENOTOOLS_DRIVER;
@@ -82,6 +83,10 @@ public abstract class GeneralComponents {
                     return new File(componentDir, identifier+".sf2");
                 case ADRENOTOOLS_DRIVER:
                     return new File(componentDir, identifier);
+                case TURNIP:
+                    if (isTurnipA8xxIdentifier(identifier)) {
+                        return new File(componentDir, "turnip-a8xx-"+identifier.substring("A8xx-".length())+".zip");
+                    }
                 default:
                     return new File(componentDir, lowerName()+"-"+identifier+".tzst");
             }
@@ -162,7 +167,9 @@ public abstract class GeneralComponents {
 
         String[] names;
         if (componentDir.isDirectory() && (names = componentDir.list()) != null) {
-            for (String name : names) result.add(parseDisplayText(type, name));
+            for (String name : names) {
+                if (!name.endsWith(".sha256")) result.add(parseDisplayText(type, name));
+            }
         }
         return result;
     }
@@ -221,6 +228,13 @@ public abstract class GeneralComponents {
      * bundled package when the installed one is corrupt.
      */
     public static boolean extractFileTo(Type type, Context context, String identifier, String defaultVersion, File destination, TarCompressorUtils.OnExtractFileListener onExtractFileListener) {
+        if (type == Type.TURNIP && isTurnipA8xxIdentifier(identifier)) {
+            File source = type.getSource(context, identifier);
+            if (!verifyComponentFile(source)) return false;
+
+            return ZipUtils.extractEntry(source, "libvulkan_freedreno.so", new File(destination, "libvulkan_freedreno.so"));
+        }
+
         if (isBuiltinComponent(type, identifier)) {
             String sourcePath = type.assetFolder()+"/"+type.lowerName()+"-"+identifier+".tzst";
             return verifyAssetPackage(context, sourcePath)
@@ -287,7 +301,14 @@ public abstract class GeneralComponents {
     }
 
     private static String parseDisplayText(Type type, String filename) {
+        if (type == Type.TURNIP && filename.startsWith("turnip-a8xx-") && filename.endsWith(".zip")) {
+            return "A8xx-"+filename.substring("turnip-a8xx-".length(), filename.length()-".zip".length());
+        }
         return filename.replace(type.lowerName()+"-", "").replace(".tzst", "").replace(".sf2", "");
+    }
+
+    private static boolean isTurnipA8xxIdentifier(String identifier) {
+        return identifier != null && identifier.regionMatches(true, 0, "A8xx-", 0, "A8xx-".length());
     }
 
     private static String parseIdentifierFromArchiveFilename(Type type, String filename) {
@@ -511,6 +532,72 @@ public abstract class GeneralComponents {
         }));
     }
 
+    private static void downloadTurnipA8xx(final Spinner spinner, final String defaultItem) {
+        final Activity activity = (Activity)spinner.getContext();
+        HttpUtils.download(TURNIP_A8XX_RELEASE_URL, (content) -> {
+            if (content == null) {
+                activity.runOnUiThread(() -> AppUtils.showToast(activity, R.string.a_network_error_occurred));
+                return;
+            }
+
+            try {
+                JSONObject release = new JSONObject(content);
+                String releaseName = release.optString("name", release.optString("tag_name", ""));
+                String versionSuffix = releaseName.replaceFirst("(?i)^a8xx[-\\s]*", "").replaceAll("[^A-Za-z0-9._-]", "");
+                if (versionSuffix.isEmpty()) {
+                    versionSuffix = release.optString("tag_name", "").replaceAll("[^A-Za-z0-9._-]", "");
+                }
+                JSONArray assets = release.optJSONArray("assets");
+                JSONObject driverAsset = null;
+                if (assets != null) {
+                    for (int i = 0; i < assets.length(); i++) {
+                        JSONObject asset = assets.optJSONObject(i);
+                        String assetName = asset != null ? asset.optString("name").toLowerCase(Locale.ENGLISH) : "";
+                        if (assetName.contains("a8xx") && assetName.endsWith(".zip")) {
+                            driverAsset = asset;
+                            break;
+                        }
+                    }
+                }
+                if (versionSuffix.isEmpty() || driverAsset == null) {
+                    activity.runOnUiThread(() -> AppUtils.showToast(activity, R.string.a_network_error_occurred));
+                    return;
+                }
+
+                String downloadUrl = driverAsset.optString("browser_download_url", "");
+                if (!downloadUrl.startsWith("https://github.com/")) {
+                    activity.runOnUiThread(() -> AppUtils.showToast(activity, R.string.a_network_error_occurred));
+                    return;
+                }
+                String checksum = driverAsset.optString("digest", "");
+                if (checksum.startsWith("sha256:")) checksum = checksum.substring("sha256:".length());
+
+                final String identifier = "A8xx-"+versionSuffix;
+                final String expectedChecksum = checksum;
+                final File destination = new File(getComponentDir(Type.TURNIP, activity), "turnip-a8xx-"+versionSuffix+".zip");
+                activity.runOnUiThread(() -> HttpUtils.download(activity, downloadUrl, destination, (success) -> {
+                    if (success) {
+                        boolean validArchive = ZipUtils.contains(destination, "libvulkan_freedreno.so");
+                        boolean checksumValid = expectedChecksum.isEmpty() || HttpUtils.verifyChecksum(destination, expectedChecksum);
+                        if (validArchive && checksumValid) {
+                            writeComponentChecksum(destination);
+                            loadSpinner(Type.TURNIP, spinner, identifier, defaultItem);
+                        }
+                        else {
+                            FileUtils.delete(destination);
+                            FileUtils.delete(new File(destination.getPath()+".sha256"));
+                            AppUtils.showToast(activity, validArchive ? R.string.checksum_verification_failed : R.string.unable_to_install_graphics_driver);
+                        }
+                    }
+                    else AppUtils.showToast(activity, R.string.a_network_error_occurred);
+                }));
+            }
+            catch (JSONException e) {
+                activity.runOnUiThread(() -> AppUtils.showToast(activity, R.string.a_network_error_occurred));
+            }
+        });
+    }
+
     public static void initViews(final Type type, View toolbox, final Spinner spinner, final String selectedItem, final String defaultItem) {
         final Context context = spinner.getContext();
         toolbox.findViewWithTag("install").setOnClickListener((v) -> {
@@ -534,8 +621,12 @@ public abstract class GeneralComponents {
                         else if (itemId == R.id.menu_item_download_file) {
                             showDownloadableListDialog(type, spinner, defaultItem);
                         }
+                        else if (itemId == R.id.menu_item_download_turnip_a8xx) {
+                            downloadTurnipA8xx(spinner, defaultItem);
+                        }
                         return true;
                     });
+                    popupMenu.getMenu().findItem(R.id.menu_item_download_turnip_a8xx).setVisible(type == Type.TURNIP);
                     popupMenu.show();
                     break;
             }
@@ -553,6 +644,7 @@ public abstract class GeneralComponents {
             if (source.exists()) {
                 ContentDialog.confirm(context, R.string.do_you_want_to_remove_this_component_version, () -> {
                     FileUtils.delete(source);
+                    FileUtils.delete(new File(source.getPath()+".sha256"));
                     loadSpinner(type, spinner, selectedItem, defaultItem);
                 });
             }

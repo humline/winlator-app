@@ -103,6 +103,39 @@ public abstract class ZipUtils {
         }
     }
 
+    public static boolean contains(File source, String entryName) {
+        try (ZipFile zipFile = new ZipFile(source)) {
+            Enumeration<ZipArchiveEntry> entries = zipFile.getEntries();
+            while (entries.hasMoreElements()) {
+                ZipArchiveEntry entry = entries.nextElement();
+                if (!entry.isDirectory() && entryName.equals(entry.getName())) return true;
+            }
+        }
+        catch (Exception e) {}
+        return false;
+    }
+
+    public static boolean extractEntry(File source, String entryName, File destination) {
+        try (ZipFile zipFile = new ZipFile(source)) {
+            Enumeration<ZipArchiveEntry> entries = zipFile.getEntries();
+            while (entries.hasMoreElements()) {
+                ZipArchiveEntry entry = entries.nextElement();
+                if (entry.isDirectory() || !entryName.equals(entry.getName())) continue;
+
+                File parent = destination.getParentFile();
+                if (parent != null) parent.mkdirs();
+                try (InputStream inStream = zipFile.getInputStream(entry);
+                     BufferedOutputStream outStream = new BufferedOutputStream(new FileOutputStream(destination), StreamUtils.BUFFER_SIZE)) {
+                    boolean copied = StreamUtils.copy(inStream, outStream);
+                    if (copied) FileUtils.chmod(destination, 0771);
+                    return copied;
+                }
+            }
+        }
+        catch (Exception e) {}
+        return false;
+    }
+
     public static void extract(Context context, String assetFile, File destination) {
         try (ZipInputStream zip = new ZipInputStream(context.getAssets().open(assetFile))) {
             ZipEntry entry;

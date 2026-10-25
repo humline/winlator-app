@@ -48,7 +48,7 @@ public class TurnipConfigDialog extends ContentDialog {
 
         setOnConfirmCallback(() -> {
             KeyValueSet newConfig = new KeyValueSet();
-            newConfig.put("version", StringUtils.parseNumber(sVersion.getSelectedItem()));
+            newConfig.put("version", sVersion.getSelectedItem().toString());
             newConfig.put("maxDeviceMemory", StringUtils.parseMemorySize(sMaxDeviceMemory.getSelectedItem()));
             newConfig.put("directRendering", cbDirectRendering.isChecked() ? "1" : "0");
             newConfig.put("presentMode", sPresentMode.getSelectedItemPosition());
